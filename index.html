@@ -86,6 +86,12 @@
   .stat.wide { grid-column: 1 / -1; }
   .stat.box b { font-size: 24px; color: var(--mine); }
   .stat .tag { width: fit-content; }
+  #toast { position: fixed; left: 50%; transform: translateX(-50%); top: calc(env(safe-area-inset-top) + 120px); z-index: 25;
+    background: #111827; border: 1px solid #4b5563; color: #fff; padding: 10px 14px; border-radius: 10px; font-size: 14px;
+    font-weight: 600; box-shadow: 0 4px 14px rgba(0,0,0,.5); display: none; max-width: 90vw; text-align: center; }
+  .lockrow { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: -4px 0 10px; }
+  .lockrow span { color: var(--muted); font-size: 13px; }
+  .lockrow button { background: #1d212a; color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; font-size: 13px; cursor: pointer; }
   .statsub { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; }
   .num.bad { background: #ef4444; color: #fff; }
   .num.caution { background: #f59e0b; color: #111; }
@@ -148,6 +154,7 @@
 </div>
 
 <div id="banner"></div>
+<div id="toast"></div>
 
 <!-- Shown only if the app's code never runs (e.g. a phone's file preview). The script removes it at startup. -->
 <div id="nojs" style="position:fixed;inset:auto 12px 40% 12px;z-index:30;background:#7f1d1d;border:1px solid #ef4444;color:#fff;padding:14px;border-radius:12px;font-size:15px;line-height:1.45">
@@ -181,7 +188,7 @@ const CITY_BBOX = [-76.72, 39.19, -76.52, 39.38];
 const QUARTERS_FIXES = {
   '45':  { remove: ['T-27'] },                    // T-27 moved out of E-45's quarters...
   '46':  { add: ['T-27', 'A-28'] },               // ...to E-46's, along with A-28
-  '124': { remove: ['E-124'], add: ['A-29'] }     // T-20's quarters (city data wrongly lists an E-124): T-20 A-29 only
+  '124': { remove: ['E-124'], add: ['A-29'] }     // T-20's quarters: delete E-124 (doesn't exist), add A-29
 };
 function fixQuarters(engine, name) {
   const fix = QUARTERS_FIXES[engine];
@@ -450,6 +457,7 @@ function start() {
     if (t && t.closest && t.closest('.mapboxgl-marker')) return; // tapped a pin; let its popup open
     const tapLayers = ['area-hydrants', 'xray', 'vacant'].filter(l => map.getLayer(l));
     if (tapLayers.length && map.queryRenderedFeatures(e.point, { layers: tapLayers }).length) return;
+    if (call) { toast('Call address is locked. Tap ✕ or "Clear call" to pick a new spot.'); return; }
     setCall({ lng: e.lngLat.lng, lat: e.lngLat.lat, label: null });
   });
   map.on('moveend', debounce(loadAreaHydrants, 400));
@@ -457,6 +465,12 @@ function start() {
 
   loadStations();
   loadBoxes();
+}
+
+let toastTimer;
+function toast(msg) {
+  const t = $('toast'); t.textContent = msg; t.style.display = 'block';
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => { t.style.display = 'none'; }, 2200);
 }
 
 function debounce(fn, ms) { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; }
@@ -1123,6 +1137,7 @@ function renderSheet() {
 
   $('sheetBody').innerHTML = `
     <div class="addr">${esc(label)}</div>
+    <div class="lockrow"><span>🔒 Locked: map taps won't move it</span><button id="clearCall">Clear call</button></div>
     ${hazAlert}
     <div class="stats">
       <div class="stat box"><span>Box</span><b>${boxTxt}</b>${mineTag}</div>
@@ -1142,6 +1157,8 @@ function renderSheet() {
     ${haz}
     <p class="fine">Reference and study tool. Drive times are normal-traffic estimates, and box lines and hydrants come from Baltimore City's public 911-CAD map data. Always go by dispatch and your unit's terminal.</p>`;
 
+  const cc = $('clearCall');
+  if (cc) cc.onclick = () => { $('q').value = ''; $('suggest').style.display = 'none'; clearCall(); };
   const dirEl = $('sheetBody').querySelector('details.dir');
   if (dirEl) {
     if (store('dirOpen') === '0') dirEl.removeAttribute('open');
