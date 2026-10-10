@@ -133,7 +133,7 @@
   <div class="row">
     <select id="origin" aria-label="Responding from"></select>
     <button id="colorBtn">Colors: mine</button>
-    <button id="styleBtn">Satellite</button>
+    <button id="styleBtn">Dark map</button>
   </div>
 </div>
 
@@ -323,7 +323,7 @@ let areaHydrants = { type: 'FeatureCollection', features: [] };
 let callMarker = null, hydMarkers = [];
 let gpsOrigin = null;
 let nearXray = null, nearVacant = null;
-let styleName = 'dark';
+let styleName = 'sat';   // satellite by default
 let colorMode = store('colorMode') || 'mine';   // 'mine' | 'house' | 'plain'
 const COLOR_LABELS = { mine: 'Colors: mine', house: 'Colors: houses', plain: 'Colors: plain' };
 
@@ -359,7 +359,7 @@ function start() {
 
   try {
     window.map = new mapboxgl.Map({
-      container: 'map', style: STYLES.dark,
+      container: 'map', style: STYLES[styleName],
       center: [DEFAULT_HOUSE.lng, DEFAULT_HOUSE.lat], zoom: 13.5, attributionControl: true
     });
   } catch (e) {
