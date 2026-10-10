@@ -86,6 +86,16 @@
   .stat.wide { grid-column: 1 / -1; }
   .stat.box b { font-size: 24px; color: var(--mine); }
   .stat .tag { width: fit-content; }
+  .statsub { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .num.bad { background: #ef4444; color: #fff; }
+  .num.caution { background: #f59e0b; color: #111; }
+  .hwarn { font-size: 13px; font-weight: 700; margin-top: 2px; }
+  .hwarn.bad { color: #f87171; }
+  .hwarn.caution { color: #fbbf24; }
+  .warnbar { border-radius: 10px; padding: 8px 10px; margin: 4px 0 8px; font-weight: 700; font-size: 14px; }
+  .warnbar.bad { background: #450a0a; border: 1px solid #ef4444; }
+  .hyd-pin.bad { background: #ef4444; color: #fff; }
+  .hyd-pin.caution { background: #f59e0b; }
   .btns { display: flex; gap: 8px; margin: 10px 0 4px; }
   .btns a { flex: 1; text-align: center; text-decoration: none; color: var(--text); background: #1d212a;
     border: 1px solid var(--line); border-radius: 10px; padding: 10px; font-size: 14px; }
@@ -171,7 +181,7 @@ const CITY_BBOX = [-76.72, 39.19, -76.52, 39.38];
 const QUARTERS_FIXES = {
   '45':  { remove: ['T-27'] },                    // T-27 moved out of E-45's quarters...
   '46':  { add: ['T-27', 'A-28'] },               // ...to E-46's, along with A-28
-  '124': { remove: ['E-124'], add: ['A-29'] }     // T-20's quarters: E-124 out, A-29 in
+  '124': { remove: ['E-124'], add: ['A-29'] }     // T-20's quarters (city data wrongly lists an E-124): T-20 A-29 only
 };
 function fixQuarters(engine, name) {
   const fix = QUARTERS_FIXES[engine];
@@ -197,6 +207,8 @@ const DEFAULT_HOUSE = { id: 'E-20', name: 'E-20 T-18 M-8', address: '3130 W. Nor
 // Fire Dept hazard buildings (CODE-X / X-RAY / UNSAFE) from the 911-CAD system, and DHCD open vacant building notices
 const XRAY_SVC = 'https://baltegis.baltimorecity.gov/mapping/rest/services/911/Fire_CODEX_XRAY_UNSAFE_Building_ALT/MapServer';
 const VACANT_SVC = 'https://egisdata.baltimorecity.gov/egis/rest/services/Housing/DHCD_Open_Baltimore_Datasets/FeatureServer';
+const LAYER_BUILDINGS = 20;                // building footprints with height and stories
+const HOSE_LENGTH_FT = 50;                 // used for the "about N lengths" hydrant estimate
 // Backup copy of the same hydrant data, published by the city as a separate service
 const HYDRANT_BACKUP = 'https://gisdata.baltimorecity.gov/egis/rest/services/CAD911/Hydrants_City/FeatureServer';
 const HYDRANT_FIELDS = 'HYDRANT_ID,CAD_ADDR,STREET_NUM,STREET_NAM,CROSS_STRE,CORNER_POS,LOCATION_D,LOCATION_1,SRC_MAIN_S,FEAT_STATU,CONDITION';
@@ -254,17 +266,42 @@ function labelPoint(geom) {
   const polys = geom.type === 'Polygon' ? [geom.coordinates] : geom.coordinates;
   let best = null, bestA = -1;
   polys.forEach(p => {
-    const r = p[0]; let a = 0, cx = 0, cy = 0;
+    const r = p[0], [ox, oy] = r[0];          // measure from the first corner to keep precision on small shapes
+    let a = 0, cx = 0, cy = 0;
     for (let i = 0; i < r.length - 1; i++) {
-      const f = r[i][0] * r[i + 1][1] - r[i + 1][0] * r[i][1];
-      a += f; cx += (r[i][0] + r[i + 1][0]) * f; cy += (r[i][1] + r[i + 1][1]) * f;
+      const x0 = r[i][0] - ox, y0 = r[i][1] - oy, x1 = r[i + 1][0] - ox, y1 = r[i + 1][1] - oy;
+      const f = x0 * y1 - x1 * y0;
+      a += f; cx += (x0 + x1) * f; cy += (y0 + y1) * f;
     }
-    if (Math.abs(a) > bestA && a !== 0) { bestA = Math.abs(a); best = [cx / (3 * a), cy / (3 * a)]; }
+    if (Math.abs(a) > bestA && a !== 0) { bestA = Math.abs(a); best = [ox + cx / (3 * a), oy + cy / (3 * a)]; }
   });
   return best || polys[0][0][0];
 }
 // "E-20 T-18 M-8" -> "20"
 function engineNumber(name) { const m = /\bE-?\s*(\d+)/i.exec(name || ''); return m ? m[1] : null; }
+// Compass bearing (degrees) from a to b
+function bearing(a, b) {
+  const dx = (b[0] - a[0]) * Math.cos(a[1] * Math.PI / 180), dy = b[1] - a[1];
+  return (Math.atan2(dx, dy) * 180 / Math.PI + 360) % 360;
+}
+const compass = deg => ['north', 'northeast', 'east', 'southeast', 'south', 'southwest', 'west', 'northwest'][Math.round(deg / 45) % 8];
+const angleGap = (a, b) => { const d = Math.abs(a - b) % 360; return d > 180 ? 360 - d : d; };
+// Feet from a point to the nearest edge of a polygon (0 if inside)
+function feetToPolygon(pt, geom) {
+  if (pointInGeo(pt, geom)) return 0;
+  const k = Math.cos(pt[1] * Math.PI / 180);
+  let best = Infinity;
+  (geom.type === 'Polygon' ? [geom.coordinates] : geom.coordinates).forEach(p => p.forEach(r => {
+    for (let i = 0; i < r.length - 1; i++) {
+      const ax = (r[i][0] - pt[0]) * k, ay = r[i][1] - pt[1], bx = (r[i + 1][0] - pt[0]) * k, by = r[i + 1][1] - pt[1];
+      const dx = bx - ax, dy = by - ay, L = dx * dx + dy * dy;
+      const t = L ? Math.max(0, Math.min(1, -(ax * dx + ay * dy) / L)) : 0;
+      best = Math.min(best, Math.hypot(ax + t * dx, ay + t * dy));
+    }
+  }));
+  return best * 364000;   // degrees of latitude -> feet
+}
+
 // Give each firehouse's boxes a color so that neighboring houses never share one
 const HOUSE_COLORS = ['#f87171', '#fb923c', '#4ade80', '#38bdf8', '#c084fc', '#f472b6', '#2dd4bf', '#a3e635', '#818cf8', '#fbbf24', '#e879f9', '#94a3b8'];
 function bboxOf(geom) {
@@ -351,6 +388,7 @@ let areaHydrants = { type: 'FeatureCollection', features: [] };
 let callMarker = null, hydMarkers = [];
 let gpsOrigin = null;
 let nearXray = null, nearVacant = null;
+let callBldg = null, callAccess = null;
 let styleName = 'sat';   // satellite by default
 let colorMode = store('colorMode') || 'mine';   // 'mine' | 'house' | 'plain'
 const COLOR_LABELS = { mine: 'Colors: mine', house: 'Colors: houses', plain: 'Colors: plain' };
@@ -459,6 +497,19 @@ function addOverlays() {
     layout: { 'text-field': ['get', 'name'], 'text-size': 12, 'text-offset': [0, 1.3], 'text-anchor': 'top',
               'text-font': ['DIN Pro Bold', 'Arial Unicode MS Bold'] },
     paint: { 'text-color': '#fff', 'text-halo-color': '#000', 'text-halo-width': 1.6 } });
+
+  // Alleys from the base map's road data (OpenStreetMap via Mapbox), drawn bright so rear access stands out
+  if (map.getSource('composite')) {
+    try {
+      map.addLayer({ id: 'alleys', type: 'line', source: 'composite', 'source-layer': 'road', minzoom: 14,
+        filter: ['all', ['==', ['get', 'class'], 'service'], ['==', ['get', 'type'], 'service:alley']],
+        layout: { 'line-cap': 'round', 'line-join': 'round' },
+        paint: { 'line-color': '#e879f9', 'line-width': ['interpolate', ['linear'], ['zoom'], 14, 1, 18, 5], 'line-opacity': 0.9 } }, firstSymbol);
+    } catch (e) { console.error(e); }
+  }
+  map.addSource('callbldg', { type: 'geojson', data: callBldg ? callBldg.feature : { type: 'FeatureCollection', features: [] } });
+  map.addLayer({ id: 'callbldg-fill', type: 'fill', source: 'callbldg', paint: { 'fill-color': '#fde047', 'fill-opacity': 0.25 } });
+  map.addLayer({ id: 'callbldg-line', type: 'line', source: 'callbldg', paint: { 'line-color': '#fde047', 'line-width': 3 } });
 
   map.addSource('vacant', { type: 'geojson', data: areaVacant });
   map.addSource('xray', { type: 'geojson', data: areaXray });
@@ -778,7 +829,8 @@ let callSeq = 0;
 async function setCall(pt) {
   const seq = ++callSeq;
   call = pt; callBox = findBox(pt); routeGeo = null; nearHydrants = null; window._route = null;
-  nearXray = null; nearVacant = null;
+  nearXray = null; nearVacant = null; callBldg = null; callAccess = null;
+  setData('callbldg', { type: 'FeatureCollection', features: [] });
   if (callMarker) callMarker.remove();
   const el = document.createElement('div'); el.className = 'call-pin';
   callMarker = new mapboxgl.Marker({ element: el, anchor: 'bottom' }).setLngLat([pt.lng, pt.lat]).addTo(map);
@@ -792,10 +844,12 @@ async function setCall(pt) {
   runRoute();
   loadNearHydrants(seq);
   loadNearHazards(seq);
+  loadBuildingAndAccess(seq);
 }
 
 function clearCall() {
   callSeq++; call = null; callBox = null; routeGeo = null; nearHydrants = []; window._route = null;
+  callBldg = null; callAccess = null; setData('callbldg', { type: 'FeatureCollection', features: [] });
   if (callMarker) callMarker.remove(); callMarker = null;
   hydMarkers.forEach(m => m.remove()); hydMarkers = [];
   setData('route', { type: 'FeatureCollection', features: [] });
@@ -839,7 +893,8 @@ async function loadNearHydrants(seq) {
       ft: feetBetween(pt, [f.geometry.x, f.geometry.y]) }))
       .sort((a, b) => a.ft - b.ft).slice(0, 5);
     nearHydrants.forEach((h, i) => {
-      const el = document.createElement('div'); el.className = 'hyd-pin'; el.textContent = i + 1;
+      const t = hydrantText(h.p);
+      const el = document.createElement('div'); el.className = 'hyd-pin' + (t.bad.length ? ' bad' : t.caution.length ? ' caution' : ''); el.textContent = i + 1;
       hydMarkers.push(new mapboxgl.Marker({ element: el }).setLngLat([h.lng, h.lat])
         .setPopup(new mapboxgl.Popup({ offset: 14 }).setHTML(hydrantHTML(h.p))).addTo(map));
     });
@@ -848,6 +903,64 @@ async function loadNearHydrants(seq) {
     nearHydrants = { error: e.message || String(e) };
   }
   renderSheet(); fitAll();
+}
+
+// Building at the address (height, stories, outline) and where the nearest alley is
+async function loadBuildingAndAccess(seq) {
+  const pt = [call.lng, call.lat];
+  let center = pt;
+  // 1) Building footprint: the one under the pin, or the closest within about 80 ft
+  try {
+    const d = 0.0003, dLat = d * 0.77;
+    const res = await cityQuery(LAYER_BUILDINGS, { geometry: [pt[0] - d, pt[1] - dLat, pt[0] + d, pt[1] + dLat].join(','),
+      geometryType: 'esriGeometryEnvelope', inSR: '4326', spatialRel: 'esriSpatialRelIntersects',
+      outFields: 'BLDGHEIGHT,NUMSTORIES,FEATURECOD', returnGeometry: 'true', geometryPrecision: '7' });
+    if (seq !== callSeq) return;
+    const cands = (res.features || []).filter(f => f.geometry && f.geometry.rings && f.geometry.rings.length)
+      .map(f => { const g = esriToGeo(f.geometry.rings); return { a: f.attributes || {}, g, ft: feetToPolygon(pt, g) }; })
+      .sort((x, y) => x.ft - y.ft);
+    const b = cands[0];
+    if (b && b.ft <= 80) {
+      center = labelPoint(b.g);
+      const h = Number(b.a.BLDGHEIGHT), st = Number(b.a.NUMSTORIES);
+      callBldg = { height: h > 0 ? Math.round(h) : null, stories: st > 0 ? st : null, ft: b.ft,
+                   feature: { type: 'Feature', properties: {}, geometry: b.g } };
+      setData('callbldg', callBldg.feature);
+    } else callBldg = { none: true };
+  } catch (e) {
+    if (seq !== callSeq) return;
+    callBldg = { error: e.message || String(e) };
+  }
+  renderSheet();
+
+  // 2) Alleys and the front street near the building (Mapbox road data)
+  try {
+    const url = `https://api.mapbox.com/v4/mapbox.mapbox-streets-v8/tilequery/${center[0]},${center[1]}.json` +
+      `?radius=70&limit=50&layers=road&geometry=linestring&dedupe=true&access_token=${MAPBOX_TOKEN}`;
+    const r = await fetch(url); const d = await r.json();
+    if (seq !== callSeq) return;
+    if (!r.ok) throw new Error(d.message || ('HTTP ' + r.status));
+    const roads = (d.features || []).map(f => ({ p: f.properties || {}, c: f.geometry && f.geometry.coordinates,
+      ft: Math.round(((f.properties || {}).tilequery || {}).distance * 3.281) })).filter(x => x.c);
+    const isAlley = x => x.p.class === 'service' && x.p.type === 'service:alley';
+    const isStreet = x => ['street', 'street_limited', 'secondary', 'tertiary', 'primary', 'trunk'].includes(x.p.class) && x.p.name;
+    const alley = roads.filter(isAlley).sort((a, b) => a.ft - b.ft)[0];
+    const street = roads.filter(isStreet).sort((a, b) => a.ft - b.ft)[0];
+    if (!alley) callAccess = { none: true, street: street ? street.p.name : null };
+    else {
+      const ab = bearing(center, alley.c);
+      let where = '';
+      if (street) {
+        const gap = angleGap(ab, bearing(center, street.c));
+        where = gap >= 120 ? 'rear' : gap >= 50 ? 'side' : 'front side';
+      }
+      callAccess = { ft: alley.ft, dir: compass(ab), where, name: alley.p.name || '', street: street ? street.p.name : null };
+    }
+  } catch (e) {
+    if (seq !== callSeq) return;
+    callAccess = { error: e.message || String(e) };
+  }
+  renderSheet();
 }
 
 async function loadNearHazards(seq) {
@@ -869,6 +982,8 @@ function fitAll() {
   const b = new mapboxgl.LngLatBounds([call.lng, call.lat], [call.lng, call.lat]);
   if (routeGeo) routeGeo.geometry.coordinates.forEach(c => b.extend(c));
   (Array.isArray(nearHydrants) ? nearHydrants : []).forEach(h => b.extend([h.lng, h.lat]));
+  if (callBldg && callBldg.feature) (callBldg.feature.geometry.type === 'Polygon' ? [callBldg.feature.geometry.coordinates] : callBldg.feature.geometry.coordinates)
+    .forEach(p => p[0].forEach(c => b.extend(c)));
   const top = $('topbar').offsetHeight + 20;
   const wide = window.innerWidth >= 820;
   const bottom = wide ? 40 : Math.min($('sheet').offsetHeight, window.innerHeight * 0.5) + 20;
@@ -883,14 +998,28 @@ function hydrantText(p) {
   const loc = clean(p.CAD_ADDR) || [clean(p.STREET_NUM), clean(p.STREET_NAM)].filter(Boolean).join(' ') || clean(p.LOCATION_1) || 'Hydrant';
   const corner = [clean(p.CORNER_POS), clean(p.CROSS_STRE)].filter(Boolean).join(' corner, cross st ');
   const extra = [corner, clean(p.LOCATION_D)].filter(Boolean).join(' · ');
-  const main = Number(p.SRC_MAIN_S) > 0 ? `${p.SRC_MAIN_S}" main` : '';
-  const flags = [clean(p.FEAT_STATU), clean(p.CONDITION)].filter(Boolean);
-  return { loc, extra, main, flags, id: clean(p.HYDRANT_ID) };
+  const mainIn = Number(p.SRC_MAIN_S);
+  const main = mainIn > 0 ? `${p.SRC_MAIN_S}" main` : '';
+  // Warnings: "bad" ones mean don't count on it; "caution" ones are usable but worth knowing
+  const bad = [], caution = [];
+  const status = clean(p.FEAT_STATU).toUpperCase();
+  if (status && status !== 'ACT') bad.push(status === 'ABN' ? 'Abandoned' : status === 'INA' ? 'Inactive' : 'Status: ' + status);
+  if (p.DATEABANDO) bad.push('Marked abandoned');
+  const cond = clean(p.CONDITION), svc = clean(p.SERVICE);
+  if (cond) (/(OOS|OUT|BAD|BROKE|DAMAG|DEFECT|INOP)/i.test(cond) ? bad : caution).push(cond);
+  if (svc) (/(OOS|OUT|NO|INOP)/i.test(svc) ? bad : caution).push(svc);
+  const owner = clean(p.RESP_AGENC).toUpperCase();
+  if (owner === 'PRI') caution.push('Private hydrant');
+  if (owner === 'BCO') caution.push('County hydrant');
+  if (mainIn > 0 && mainIn < 6) caution.push(`Small main (${mainIn}")`);
+  return { loc, extra, main, bad: [...new Set(bad)], caution: [...new Set(caution)], id: clean(p.HYDRANT_ID) };
 }
 function hydrantHTML(p) {
   const t = hydrantText(p);
+  const warn = t.bad.concat(t.caution);
   return `<b>${esc(t.loc)}</b>${t.extra ? `<br>${esc(t.extra)}` : ''}` +
-    `${t.main ? `<br>${esc(t.main)}` : ''}${t.id ? `<br><span style="color:#9aa3b2">ID ${esc(t.id)}</span>` : ''}`;
+    `${t.main ? `<br>${esc(t.main)}` : ''}${warn.length ? `<br><b style="color:${t.bad.length ? '#f87171' : '#fbbf24'}">⚠ ${esc(warn.join(' · '))}</b>` : ''}` +
+    `${t.id ? `<br><span style="color:#9aa3b2">ID ${esc(t.id)}</span>` : ''}`;
 }
 function fmtDate(v) { const d = new Date(Number(v)); return isFinite(d) && v ? d.toLocaleDateString() : ''; }
 function xrayHTML(p) {
@@ -925,12 +1054,40 @@ function renderSheet() {
   if (nearHydrants && nearHydrants.error) {
     hyd = `<div class="hint" style="color:#fca5a5">Couldn't load hydrants from the city's server: ${esc(nearHydrants.error)}</div>`;
   } else if (Array.isArray(nearHydrants)) {
-    hyd = nearHydrants.length ? nearHydrants.map((h, i) => {
-      const t = hydrantText(h.p);
-      return `<div class="hyd" data-h="${i}"><div class="num">${i + 1}</div><div>
-        <div class="main">${esc(t.loc)} <span class="tag">${Math.round(h.ft)} ft</span>${t.main ? `<span class="tag">${esc(t.main)}</span>` : ''}${t.flags.map(f => `<span class="tag">${esc(f)}</span>`).join('')}</div>
-        ${t.extra ? `<div class="sub">${esc(t.extra)}</div>` : ''}</div></div>`;
+    const ts = nearHydrants.map(h => hydrantText(h.p));
+    let hydAlert = '';
+    if (ts.length && ts[0].bad.length) {
+      const ok = ts.findIndex(t => !t.bad.length);
+      hydAlert = `<div class="warnbar bad">⚠ Closest hydrant is flagged (${esc(ts[0].bad.join(', '))}).` +
+        (ok >= 0 ? ` Nearest usable: #${ok + 1}, ${Math.round(nearHydrants[ok].ft)} ft.` : ' No unflagged hydrant in this list.') + '</div>';
+    }
+    hyd = nearHydrants.length ? hydAlert + nearHydrants.map((h, i) => {
+      const t = ts[i];
+      const lengths = Math.max(1, Math.ceil(h.ft / HOSE_LENGTH_FT));
+      const numCls = t.bad.length ? 'num bad' : t.caution.length ? 'num caution' : 'num';
+      const warn = t.bad.map(w => `<div class="hwarn bad">⚠ ${esc(w)}</div>`).join('') + t.caution.map(w => `<div class="hwarn caution">⚠ ${esc(w)}</div>`).join('');
+      return `<div class="hyd" data-h="${i}"><div class="${numCls}">${i + 1}</div><div>
+        <div class="main">${esc(t.loc)} <span class="tag">${Math.round(h.ft)} ft · ~${lengths} length${lengths > 1 ? 's' : ''}</span>${t.main ? `<span class="tag">${esc(t.main)}</span>` : ''}</div>
+        ${warn}${t.extra ? `<div class="sub">${esc(t.extra)}</div>` : ''}</div></div>`;
     }).join('') : '<div class="hint">No hydrants found within about 3,000 ft.</div>';
+  }
+
+  let bldgTxt = '<span class="loading">checking…</span>', bldgSub = '';
+  if (callBldg && callBldg.error) bldgTxt = '<span style="color:#fca5a5;font-size:13px">Couldn\'t load</span>';
+  else if (callBldg && callBldg.none) bldgTxt = '<span style="font-size:14px">No building found at this spot</span>';
+  else if (callBldg) {
+    const parts = [];
+    if (callBldg.stories) parts.push(`${callBldg.stories} stor${callBldg.stories > 1 ? 'ies' : 'y'}`);
+    if (callBldg.height) parts.push(`~${callBldg.height} ft tall`);
+    bldgTxt = parts.length ? parts.join(' · ') : '<span style="font-size:14px">Size not recorded</span>';
+    bldgSub = `<small class="statsub">Outlined in yellow${callBldg.ft > 0 ? ' (closest to the pin)' : ''}</small>`;
+  }
+  let accessTxt = '<span class="loading">checking…</span>', accessSub = '';
+  if (callAccess && callAccess.error) accessTxt = '<span style="color:#fca5a5;font-size:13px">Couldn\'t load</span>';
+  else if (callAccess && callAccess.none) { accessTxt = '<span style="font-size:14px">No alley mapped within ~230 ft</span>'; }
+  else if (callAccess) {
+    accessTxt = `${callAccess.where === 'rear' ? 'Rear alley' : callAccess.where === 'side' ? 'Side alley' : 'Alley'} ~${callAccess.ft} ft ${callAccess.dir}`;
+    accessSub = `<small class="statsub">${callAccess.name ? esc(callAccess.name) + ' · ' : ''}${callAccess.street ? 'front on ' + esc(callAccess.street) + ' · ' : ''}alleys in pink on map</small>`;
   }
 
   let haz = '<div class="loading">Checking hazard and vacant buildings…</div>', hazAlert = '';
@@ -971,6 +1128,8 @@ function renderSheet() {
       <div class="stat box"><span>Box</span><b>${boxTxt}</b>${mineTag}</div>
       <div class="stat"><span>First due house</span><b>${house}</b></div>
       <div class="stat wide"><span>Drive from ${esc(o ? o.name : '…')} (civilian estimate)</span><b>${routeTxt}</b></div>
+      <div class="stat"><span>Building</span><b>${bldgTxt}</b>${bldgSub}</div>
+      <div class="stat"><span>Rear / alley access</span><b>${accessTxt}</b>${accessSub}</div>
     </div>
     <div class="btns">
       <a href="https://www.google.com/maps/dir/?api=1&destination=${dest}&travelmode=driving" target="_blank" rel="noopener">Google Maps</a>
