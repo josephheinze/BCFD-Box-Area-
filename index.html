@@ -164,6 +164,34 @@ const CITY = 'https://egisdata.baltimorecity.gov/egis/rest/services/911/BaltCity
 const LAYER = { stations: 0, hydrants: 3, boxes: 12 };
 const AREA_FIELD = 'AddressDB.EGISDATA.Fire_RDs.Area';
 const CITY_BBOX = [-76.72, 39.19, -76.52, 39.38];
+// ============================================================
+// FIREHOUSE CORRECTIONS (the city's map data can lag behind real moves)
+// Key = engine number of the quarters. remove/add = unit names like 'T-27', 'A-28'.
+// ============================================================
+const QUARTERS_FIXES = {
+  '45':  { remove: ['T-27'] },                    // T-27 moved out of E-45's quarters...
+  '46':  { add: ['T-27', 'A-28'] },               // ...to E-46's, along with A-28
+  '124': { remove: ['E-124'], add: ['A-29'] }     // T-20's quarters: E-124 out, A-29 in
+};
+function fixQuarters(engine, name) {
+  const fix = QUARTERS_FIXES[engine];
+  if (!fix) return name;
+  let units = name.replace(/,/g, ' ').split(/\s+/).filter(Boolean);
+  const norm = u => u.toUpperCase().replace(/\s+/g, '');
+  const gone = (fix.remove || []).map(norm);
+  units = units.filter(u => !gone.includes(norm(u)));
+  (fix.add || []).forEach(u => { if (!units.some(x => norm(x) === norm(u))) units.push(u); });
+  // keep a sensible order: engine, trucks, then everything else as listed
+  const rank = u => /^E-/i.test(u) ? 0 : /^T-/i.test(u) ? 1 : 2;
+  return units.map((u, i) => [u, i]).sort((a, b) => rank(a[0]) - rank(b[0]) || a[1] - b[1]).map(x => x[0]).join(' ');
+}
+// "E-46 T-27 A-28" -> "Engine 46 & Truck 27" (same style the city uses for first-due houses)
+function houseLabel(name) {
+  const e = (name.match(/\bE-?(\d+)/i) || [])[1];
+  const trucks = [...name.matchAll(/\bT-?(\d+)/gi)].map(m => 'Truck ' + m[1]);
+  return (e ? ['Engine ' + e] : []).concat(trucks).join(' & ') || name;
+}
+
 const DEFAULT_HOUSE = { id: 'E-20', name: 'E-20 T-18 M-8', address: '3130 W. North Ave 21216',
                         lng: -76.670566868816607, lat: 39.309237721872378 };
 // Fire Dept hazard buildings (CODE-X / X-RAY / UNSAFE) from the 911-CAD system, and DHCD open vacant building notices
@@ -495,10 +523,15 @@ async function loadStations() {
   try {
     const d = await cityQuery(LAYER.stations, { where: '1=1', outFields: 'NAME,ADDRESS', returnGeometry: 'true' });
     stations = (d.features || []).filter(f => f.geometry).map(f => {
-      const name = clean(f.attributes.NAME).replace(/\s+/g, ' ');
-      return { name, address: clean(f.attributes.ADDRESS), lng: f.geometry.x, lat: f.geometry.y, engine: engineNumber(name) };
-    }).filter(s => s.engine).sort((a, b) => a.engine - b.engine);
-    stations.forEach(s => s.id = 'E-' + s.engine);
+      const raw = clean(f.attributes.NAME).replace(/\s+/g, ' ');
+      const rawEngine = engineNumber(raw);
+      if (!rawEngine) return null;                       // skip non-firehouse sites (fireboat, etc.)
+      const name = fixQuarters(rawEngine, raw);
+      const engine = engineNumber(name);                 // null if the engine moved out
+      const id = engine ? 'E-' + engine : (name.split(' ')[0] || 'Q-' + rawEngine);
+      const sortKey = Number(engine || (name.match(/\d+/) || [999])[0]);
+      return { id, name, address: clean(f.attributes.ADDRESS), lng: f.geometry.x, lat: f.geometry.y, engine, sortKey };
+    }).filter(Boolean).sort((a, b) => a.sortKey - b.sortKey);
   } catch (e) {
     cityFailed(e);
   }
@@ -523,7 +556,15 @@ async function loadBoxes() {
     boxes = { type: 'FeatureCollection', features: feats.filter(f => f.geometry && f.geometry.rings && f.geometry.rings.length).map((f, i) => {
       const box = clean(f.attributes[AREA_FIELD]);
       return { type: 'Feature', id: i, geometry: esriToGeo(f.geometry.rings),
-        properties: { box, engine: (box.split('-')[0] || '').replace(/\D/g, ''), house: clean(f.attributes.MapBook) } };
+        properties: (() => {
+          const engine = (box.split('-')[0] || '').replace(/\D/g, '');
+          let house = clean(f.attributes.MapBook);
+          if (QUARTERS_FIXES[engine]) {
+            const st = stations.find(x => x.engine === engine);
+            house = houseLabel(st ? st.name : fixQuarters(engine, house.replace(/Engine\s*/i, 'E-').replace(/Truck\s*/gi, 'T-').replace(/&/g, ' ')));
+          }
+          return { box, engine, house };
+        })() };
     }) };
     try { assignHouseColors(boxes); } catch (e) { console.error(e); }
     setData('boxes', boxes);
@@ -617,7 +658,7 @@ function currentOrigin() {
 }
 function myEngine() {
   const v = $('origin').value;
-  if (!v || v === 'gps') return null;
+  if (!v || v === 'gps' || !/^E-\d+$/.test(v)) return null;
   return v.replace('E-', '');
 }
 function getGps() {
