@@ -968,9 +968,7 @@ function alongStreet(p, dir, target) {
   return [p[0] + along * ux / (k * 364000), p[1] + along * uy / 364000];
 }
 
-// Route rule: the most direct route with the fewest turns.
-// Among the routes Mapbox offers, take the one with the fewest turns unless it's meaningfully slower
-// (more than 25% or about a minute longer than the fastest).
+// Route rule: the most direct route with the fewest turns (see pickRoute).
 function countTurns(rt) {
   const steps = (rt.legs || []).flatMap(l => l.steps || []);
   return steps.filter(s => {
@@ -981,10 +979,10 @@ function countTurns(rt) {
   }).reduce((n, st) => n + ((st.maneuver || {}).modifier === 'uturn' ? 4 : 1), 0);
 }
 function pickRoute(routes) {
-  const fastest = Math.min(...routes.map(r => r.duration));
-  const ok = routes.filter(r => r.duration <= Math.max(fastest * 1.25, fastest + 60));
-  ok.sort((a, b) => countTurns(a) - countTurns(b) || a.duration - b.duration);
-  const pick = ok[0] || routes[0];
+  // Score = drive time + 30 seconds for every turn (U-turns count as 4 turns). Lowest score wins.
+  // A straighter route on the main street beats a zigzag that's only a little faster on paper.
+  const score = r => r.duration + 30 * countTurns(r);
+  const pick = routes.slice().sort((a, b) => score(a) - score(b))[0];
   pick.turns = countTurns(pick);
   return pick;
 }
