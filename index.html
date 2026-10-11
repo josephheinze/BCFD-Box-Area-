@@ -920,13 +920,23 @@ async function runRoute() {
       const front = frontOf(call, info);
       if (front && front.ft <= 250) dest = front.c;
     } catch (e) { /* fall back to the pin */ }
+    // Leave out the front of the firehouse: start on the street in the firehouse's address (e.g. W North Ave)
+    let start = [o.lng, o.lat];
+    if (o.address) {
+      try {
+        o.frontInfo = o.frontInfo || { lng: o.lng, lat: o.lat, label: o.address };
+        const fi = await roadsAround(o.frontInfo);
+        const f = frontOf(o.frontInfo, fi);
+        if (f && feetBetween([o.lng, o.lat], f.c) <= 300) start = f.c;   // must really be next to the firehouse
+      } catch (e) { /* fall back to the station point */ }
+    }
     if (seq !== callSeq) return;
-    const url = `https://api.mapbox.com/directions/v5/mapbox/driving/${o.lng},${o.lat};${dest[0]},${dest[1]}` +
-      `?geometries=geojson&overview=full&steps=true&access_token=${MAPBOX_TOKEN}`;
+    const url = `https://api.mapbox.com/directions/v5/mapbox/driving/${start[0]},${start[1]};${dest[0]},${dest[1]}` +
+      `?alternatives=true&geometries=geojson&overview=full&steps=true&access_token=${MAPBOX_TOKEN}`;
     const r = await fetch(url); const d = await r.json();
     if (seq !== callSeq) return;
     if (!r.ok || !d.routes || !d.routes.length) throw new Error(d.message || 'No route found');
-    const rt = d.routes[0];
+    const rt = pickRoute(d.routes);
     window._route = rt;
     routeGeo = { type: 'Feature', properties: {}, geometry: rt.geometry };
     setData('route', routeGeo);
@@ -935,6 +945,27 @@ async function runRoute() {
     window._route = { error: e.message };
   }
   renderSheet();
+}
+
+// Route rule: the most direct route with the fewest turns.
+// Among the routes Mapbox offers, take the one with the fewest turns unless it's meaningfully slower
+// (more than 25% or about a minute longer than the fastest).
+function countTurns(rt) {
+  const steps = (rt.legs || []).flatMap(l => l.steps || []);
+  return steps.filter(s => {
+    const m = s.maneuver || {}, type = m.type || '', mod = m.modifier || '';
+    if (['depart', 'arrive', 'new name', 'notification'].includes(type)) return false;
+    if ((type === 'continue' || type === 'merge') && (mod === 'straight' || mod === 'slight left' || mod === 'slight right')) return false;
+    return true;
+  }).length;
+}
+function pickRoute(routes) {
+  const fastest = Math.min(...routes.map(r => r.duration));
+  const ok = routes.filter(r => r.duration <= Math.max(fastest * 1.25, fastest + 60));
+  ok.sort((a, b) => countTurns(a) - countTurns(b) || a.duration - b.duration);
+  const pick = ok[0] || routes[0];
+  pick.turns = countTurns(pick);
+  return pick;
 }
 
 async function loadNearHydrants(seq) {
@@ -970,6 +1001,7 @@ const SUFFIX = { street: 'st', st: 'st', avenue: 'ave', ave: 'ave', av: 'ave', r
 const DIRS = { north: 'n', n: 'n', south: 's', s: 's', east: 'e', e: 'e', west: 'w', w: 'w' };
 function streetCore(name) {
   let t = String(name || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/).filter(Boolean);
+  while (t.length && /^\d{5}$/.test(t[t.length - 1])) t.pop();                              // drop a ZIP code
   while (t.length && /^\d+[a-z]?$/.test(t[0]) && !/(st|nd|rd|th)$/.test(t[0])) t.shift();   // drop the house number
   if (t.length > 2 && DIRS[t[0]]) t.shift();                                                // leading W / N / ...
   if (t.length > 1 && SUFFIX[t[t.length - 1]]) t.pop();                                      // trailing St / Ave / ...
