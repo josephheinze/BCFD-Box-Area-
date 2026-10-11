@@ -402,6 +402,7 @@ let callMarker = null, hydMarkers = [];
 let gpsOrigin = null;
 let nearXray = null, nearVacant = null;
 let callAccess = null;
+let callBldgInfo = null;   // building description from Maryland property records
 let styleName = 'sat';   // satellite by default
 const colorMode = 'plain';   // box areas: plain lines, no color shading
 
@@ -879,7 +880,7 @@ let callSeq = 0;
 async function setCall(pt) {
   const seq = ++callSeq;
   call = pt; callBox = findBox(pt); routeGeo = null; nearHydrants = null; window._route = null;
-  nearXray = null; nearVacant = null; callAccess = null;
+  nearXray = null; nearVacant = null; callAccess = null; callBldgInfo = null;
   setData('callalley', { type: 'FeatureCollection', features: [] });
   if (callMarker) callMarker.remove();
   const el = document.createElement('div'); el.className = 'call-pin';
@@ -896,11 +897,12 @@ async function setCall(pt) {
   loadNearHydrants(seq);
   loadNearHazards(seq);
   loadBuildingAndAccess(seq);
+  loadBuildingInfo(seq);
 }
 
 function clearCall() {
   callSeq++; call = null; callBox = null; routeGeo = null; nearHydrants = []; window._route = null;
-  callAccess = null; setData('callalley', { type: 'FeatureCollection', features: [] });
+  callAccess = null; callBldgInfo = null; setData('callalley', { type: 'FeatureCollection', features: [] });
   if (callMarker) callMarker.remove(); callMarker = null;
   hydMarkers.forEach(m => m.remove()); hydMarkers = [];
   setData('route', { type: 'FeatureCollection', features: [] });
@@ -1148,6 +1150,75 @@ function drawFrontBack() {
   setData('callalley', fc);
 }
 
+// ---------- Building description (Maryland property records, the same data SDAT uses) ----------
+const MD_PROPERTY = 'https://geodata.md.gov/imap/rest/services/PlanningCadastre/MD_PropertyData/MapServer';
+const BLDG_FIELDS = 'ADDRESS,STRTNUM,STRTNAM,DESCSTYL,STRUSTYL,DESCBLDG,STRUBLDG,DESCCNST,BLDG_STORY,BLDG_UNITS,DESCLU,DESCCIUSE,YEARBLT';
+
+async function loadBuildingInfo(seq) {
+  const pt = [call.lng, call.lat];
+  const near = { geometry: `${pt[0]},${pt[1]}`, geometryType: 'esriGeometryPoint', inSR: '4326',
+                 spatialRel: 'esriSpatialRelIntersects', units: 'esriSRUnit_Meter', outFields: BLDG_FIELDS, returnGeometry: 'true' };
+  try {
+    let recs = [];
+    // 1) the record for this exact address (house number + street), close to the pin
+    const num = ((call.label || '').match(/^\s*(\d+)/) || [])[1];
+    const street = streetCore(call.label || '').split(' ')[0];
+    if (num && street) {
+      const d = await cityQuery(0, Object.assign({}, near, { distance: '300',
+        where: `ADDRESS LIKE '${num} %${street.toUpperCase().replace(/'/g, "''")}%'` }), MD_PROPERTY);
+      recs = d.features || [];
+    }
+    // 2) otherwise the property record nearest the pin
+    if (!recs.length) {
+      const d = await cityQuery(0, Object.assign({}, near, { distance: '35', where: '1=1' }), MD_PROPERTY);
+      recs = (d.features || []).filter(f => f.geometry)
+        .sort((a, b) => feetBetween(pt, [a.geometry.x, a.geometry.y]) - feetBetween(pt, [b.geometry.x, b.geometry.y]));
+    }
+    if (seq !== callSeq) return;
+    callBldgInfo = recs.length ? describeBuilding(recs[0].attributes || {}) : { none: true };
+  } catch (e) {
+    if (seq !== callSeq) return;
+    callBldgInfo = { error: e.message || String(e) };
+  }
+  renderSheet();
+}
+
+function describeBuilding(a) {
+  const words = [a.DESCSTYL, a.DESCBLDG, a.DESCLU, a.DESCCIUSE].map(clean).join(' | ').toLowerCase();
+  const cn = clean(a.DESCCNST).toLowerCase();
+  let stories = parseFloat(a.BLDG_STORY);
+  if (!(stories > 0)) { const m = words.match(/(\d+(?:\.\d)?)\s*(?:story|stories|sty)/); stories = m ? parseFloat(m[1]) : null; }
+  const units = parseInt(a.BLDG_UNITS, 10) || null;
+  const st = stories > 0 ? `${Math.floor(stories)}${stories % 1 ? '½' : ''}-story ` : '';
+  const woodish = /frame|siding|wood|shingle|asbestos/.test(cn);
+  const constr = /brick/.test(cn) ? (woodish ? 'brick and frame' : 'brick')
+    : /stone/.test(cn) ? (woodish ? 'stone and frame' : 'stone')
+    : woodish ? 'wood frame' : /block/.test(cn) ? 'block' : /stucco/.test(cn) ? 'stucco' : '';
+  let text;
+  if (/high.?rise|apartment|elevator|garden apt/.test(words) || (units && units >= 3 && !/town ?house|end unit|center unit/.test(words))) {
+    text = `${st}apartment building${/condo/.test(words) ? ' (condos)' : ''}${units ? ` · ${units} units` : ''}`;
+  } else if (/end unit|end of group|end group|end row/.test(words)) {
+    text = `${st}end-of-group rowhouse`;
+  } else if (/center unit|centre unit|middle|interior unit|inside unit|mid.?group/.test(words)) {
+    text = `${st}middle-of-group rowhouse`;
+  } else if (/town ?house|row ?house|\brow\b|condo town/.test(words)) {
+    text = `${st}rowhouse`;
+  } else if (/standard unit|detached|single|split|cape|colonial|bungalow/.test(words)) {
+    text = `${st}single-family`;
+  } else if (/residential|dwelling/.test(words)) {
+    text = `${st}residential (row or detached not on record)`;
+  } else if (/commercial|industrial|retail|office|exempt|institutional/.test(words)) {
+    text = `Commercial: ${clean(a.DESCCIUSE) || clean(a.DESCLU) || 'type not recorded'}`;
+  } else {
+    text = clean(a.DESCLU) || 'Building type not recorded';
+  }
+  if (constr && !/^Commercial/.test(text)) text += /single-family$/.test(text) ? `, ${constr}` : ` · ${constr}`;
+  const yr = parseInt(a.YEARBLT, 10);
+  const detail = [clean(a.ADDRESS), yr > 1700 ? `built ${yr}` : '', [clean(a.DESCSTYL), clean(a.DESCBLDG), clean(a.DESCCNST)].filter(Boolean).join(' / ')]
+    .filter(Boolean).join(' · ');
+  return { text: text.charAt(0).toUpperCase() + text.slice(1), detail };
+}
+
 async function loadNearHazards(seq) {
   const pt = [call.lng, call.lat], d = 0.0025, dLat = d * 0.77;     // about 700 ft around the call
   const box = [pt[0] - d, pt[1] - dLat, pt[0] + d, pt[1] + dLat];
@@ -1291,6 +1362,11 @@ function renderSheet() {
     }).join('') : '<div class="hint">No hydrants found within about 3,000 ft.</div>';
   }
 
+  let bldgInfoTxt = '<span class="loading">checking property records…</span>', bldgInfoSub = '';
+  if (callBldgInfo && callBldgInfo.error) bldgInfoTxt = `<span style="color:#fca5a5;font-size:14px">Couldn't load property records: ${esc(callBldgInfo.error)}</span>`;
+  else if (callBldgInfo && callBldgInfo.none) bldgInfoTxt = '<span style="font-size:15px">No property record found here</span>';
+  else if (callBldgInfo) { bldgInfoTxt = esc(callBldgInfo.text); bldgInfoSub = callBldgInfo.detail ? `<small class="statsub">${esc(callBldgInfo.detail)}</small>` : ''; }
+
   let accessTxt = '<span class="loading">checking…</span>', accessSub = '';
   if (callAccess && callAccess.error) accessTxt = '<span style="color:#fca5a5;font-size:13px">Couldn\'t load</span>';
   else if (callAccess && callAccess.none) { accessTxt = '<span style="font-size:14px">No alley mapped within ~230 ft</span>'; }
@@ -1346,6 +1422,7 @@ function renderSheet() {
     <div class="stats">
       <div class="stat wide boxcard"><span>Box · first due house</span>
         <div class="boxrow"><b class="boxnum">${boxTxt}</b><div class="fd">${house}${mineTag}</div></div></div>
+      <div class="stat wide"><span>Building</span><b>${bldgInfoTxt}</b>${bldgInfoSub}</div>
       <div class="stat wide"><span>Miles and estimated time from ${esc(o ? o.name : '…')}</span><b>${routeTxt}</b></div>
     </div>
     ${dirSection}
