@@ -951,7 +951,8 @@ async function tapLabel(pt) {
       try {
         const d = await cityQuery(0, { geometry: `${at[0]},${at[1]}`, geometryType: 'esriGeometryPoint', inSR: '4326',
           spatialRel: 'esriSpatialRelIntersects', distance: '35', units: 'esriSRUnit_Meter', where: '1=1', outFields: 'ADDRESS', returnGeometry: 'true' }, src);
-        const r = (d.features || []).filter(f => f.geometry && f.attributes && clean(f.attributes.ADDRESS))
+        const r = (d.features || []).filter(f => f.geometry && f.attributes && clean(f.attributes.ADDRESS)
+            && fp && feetToPolygon([f.geometry.x, f.geometry.y], fp) < 10)    // only a record that sits on the tapped building
           .sort((a, b) => feetBetween(at, [a.geometry.x, a.geometry.y]) - feetBetween(at, [b.geometry.x, b.geometry.y]))[0];
         if (r) return clean(r.attributes.ADDRESS).toLowerCase().replace(/\b([a-z])/g, c => c.toUpperCase());
         break;                                                        // server answered, no record: use the map's address
@@ -1351,7 +1352,7 @@ async function loadBuildingInfo(seq) {
       }
       if (!recs.length) {
         const d = await cityQuery(0, Object.assign({}, near, { distance: '35', where: '1=1' }), src);
-        recs = (d.features || []).filter(f => f.geometry)
+        recs = (d.features || []).filter(f => f.geometry && (!fpG || feetToPolygon([f.geometry.x, f.geometry.y], fpG) < 10))   // only a record on this building
           .sort((a, b) => feetBetween(inPt, [a.geometry.x, a.geometry.y]) - feetBetween(inPt, [b.geometry.x, b.geometry.y]));
       }
       if (seq !== callSeq) return;
