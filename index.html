@@ -156,7 +156,6 @@
   <div id="suggest"></div>
   <div class="row">
     <select id="origin" aria-label="Responding from"></select>
-    <button id="view3dBtn">3D</button>
     <button id="styleBtn">Dark map</button>
   </div>
 </div>
@@ -423,7 +422,6 @@ function start() {
   setupSearch();
   $('grab').onclick = () => $('sheet').classList.toggle('collapsed');
 
-  $('view3dBtn').onclick = () => set3D(!is3D);
   $('styleBtn').onclick = () => {
     if (!window.map) return;
     styleName = styleName === 'dark' ? 'sat' : 'dark';
@@ -468,19 +466,6 @@ function start() {
   loadBoxes();
 }
 
-// ---------- 2D / 3D ----------
-let is3D = false;
-function set3D(on) {
-  is3D = on;
-  $('view3dBtn').textContent = on ? '2D' : '3D';
-  if (!window.map) return;
-  if (map.getLayer('bldg-3d')) map.setLayoutProperty('bldg-3d', 'visibility', on ? 'visible' : 'none');
-  // In 3D, look at the building from the A side
-  const facing = call && callAccess && callAccess.front ? bearing(callAccess.front, [call.lng, call.lat]) : map.getBearing();
-  map.easeTo({ pitch: on ? 60 : 0, bearing: on ? facing : 0, center: call ? [call.lng, call.lat] : map.getCenter(),
-               zoom: call ? Math.max(map.getZoom(), 17.5) : map.getZoom(), duration: 900 });
-}
-
 let toastTimer;
 function toast(msg) {
   const t = $('toast'); t.textContent = msg; t.style.display = 'block';
@@ -498,15 +483,6 @@ function addOverlays() {
   if (styleName === 'sat') map.getStyle().layers.forEach(l => {
     if (l.type === 'line' && (l['source-layer'] === 'road' || /^(road|bridge|tunnel)/.test(l.id))) { try { map.setLayoutProperty(l.id, 'visibility', 'none'); } catch (e) {} }
   });
-
-  if (map.getSource('composite')) {
-    try {
-      map.addLayer({ id: 'bldg-3d', type: 'fill-extrusion', source: 'composite', 'source-layer': 'building', minzoom: 14,
-        filter: ['==', ['get', 'extrude'], 'true'], layout: { visibility: is3D ? 'visible' : 'none' },
-        paint: { 'fill-extrusion-color': '#d6d3d1', 'fill-extrusion-opacity': 0.75,
-                 'fill-extrusion-height': ['coalesce', ['get', 'height'], 9], 'fill-extrusion-base': ['coalesce', ['get', 'min_height'], 0] } });
-    } catch (e) { console.error(e); }
-  }
 
   map.addSource('boxes', { type: 'geojson', data: boxes || empty });
   map.addSource('box-labels', { type: 'geojson', data: boxLabels() });
@@ -1063,6 +1039,7 @@ async function loadBuildingAndAccess(seq) {
                         street: front ? front.p.name : null, front: front ? front.c : null, pt: pick.a.c, walks: null };
     drawFrontBack();
     renderSheet();
+    fitAll();
     if (callAccess.front && callAccess.pt) {
       // FRONT = the sidewalk in front of the building (Alpha side), not the middle of the street
       callAccess.frontWalk = stepToward(callAccess.front, center, 30);
@@ -1085,7 +1062,6 @@ async function loadBuildingAndAccess(seq) {
       if (seq !== callSeq) return;
       callAccess.walks = walks;
       drawFrontBack();
-      fitAll();
     }
   } catch (e) {
     if (seq !== callSeq) return;
@@ -1137,17 +1113,20 @@ async function loadNearHazards(seq) {
 
 function fitAll() {
   if (!call) return;
-  // Close-up on the address, keeping the nearest hydrants (within about 400 ft) in view
+  // Close-up on the address (A to C), plus the nearest hydrant if it's close
   const b = new mapboxgl.LngLatBounds([call.lng, call.lat], [call.lng, call.lat]);
-  (Array.isArray(nearHydrants) ? nearHydrants : []).filter(h => h.ft <= 400).slice(0, 3).forEach(h => b.extend([h.lng, h.lat]));
-  if (callAccess && callAccess.walks) callAccess.walks.forEach(w => w.geometry.coordinates.forEach(c => b.extend(c)));
+  const h1 = Array.isArray(nearHydrants) && nearHydrants[0];
+  if (h1 && h1.ft <= 300) b.extend([h1.lng, h1.lat]);
+  if (callAccess && callAccess.front) b.extend(stepToward(callAccess.front, [call.lng, call.lat], 30));
+  if (callAccess && callAccess.pt) b.extend(callAccess.pt);
   const top = $('topbar').offsetHeight + 20;
   const wide = window.innerWidth >= 820;
   const bottom = wide ? 40 : Math.min($('sheet').offsetHeight, window.innerHeight * 0.5) + 20;
   const left = wide ? 420 : 40;
-  const facing = is3D && callAccess && callAccess.front ? bearing(callAccess.front, [call.lng, call.lat]) : map.getBearing();
-  map.fitBounds(b, { padding: { top, bottom, left, right: 40 }, maxZoom: 18.5, duration: 700,
-                     pitch: is3D ? 60 : 0, bearing: is3D ? facing : 0 });
+  // Turn the map so you're looking at the building from the street: A side at the bottom, C at the top
+  const facing = callAccess && callAccess.front ? bearing(callAccess.front, [call.lng, call.lat]) : 0;
+  map.fitBounds(b, { padding: { top, bottom, left, right: 40 }, maxZoom: 19, duration: 700,
+                     pitch: 0, bearing: facing });
 }
 
 // ============================================================
