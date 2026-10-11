@@ -1164,7 +1164,7 @@ async function loadBuildingAndAccess(seq) {
     renderSheet();
     fitAll();
     const walkTo = callAccess.sides && callAccess.sides.walkTo;
-    if (callAccess.front && walkTo) {
+    if (callAccess.front && walkTo && walkOK()) {
       // FRONT = the sidewalk in front of the building (Alpha side), not the middle of the street
       callAccess.frontWalk = stepToward(callAccess.front, center, 30);
       const toBldg = bearing(callAccess.front, center);
@@ -1271,10 +1271,8 @@ function computeSides() {
   return { A, B, C, D, cLabel, walkTo };
 }
 
-// The A-to-C walking line and distance only make sense on rowhouses and single-family homes
-function walkOK() {
-  return !!(callBldgInfo && callBldgInfo.text && /rowhouse|single-family|row or detached/i.test(callBldgInfo.text));
-}
+// The yellow A-to-C walking line and walk distance are turned off everywhere
+function walkOK() { return false; }
 
 // The access line plus side labels: A front, B left, C rear, D right (as seen standing on the A side)
 function drawFrontBack() {
