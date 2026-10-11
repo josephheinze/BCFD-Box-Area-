@@ -1021,6 +1021,7 @@ async function loadBuildingAndAccess(seq) {
         if (w) walks = [Object.assign(w, { via: '', dir: '' })];
       }
       walks.sort((x, y) => x.ft - y.ft);
+      walks = walks.slice(0, 1);                                         // keep only the shortest way to the rear
       if (seq !== callSeq) return;
       callAccess.walks = walks;
       drawFrontBack();
@@ -1162,10 +1163,10 @@ function renderSheet() {
     accessTxt = `${callAccess.where === 'rear' ? 'Rear alley' : callAccess.where === 'side' ? 'Side alley' : 'Alley'} ~${callAccess.ft} ft ${callAccess.dir}`;
     const ways = callAccess.walks == null ? '<div class="sub loading">Finding the ways around back…</div>'
       : callAccess.walks.length ? callAccess.walks.map((w, i) =>
-          `<div class="walk">${i === 0 ? 'Shortest' : 'Other way'}: ${w.dir ? 'around the ' + esc(w.dir) : 'around the row'} <span class="tag">~${w.ft} ft walk</span></div>`).join('')
+          `<div class="walk">Shortest way: ${w.dir ? 'around the ' + esc(w.dir) : 'around the row'} <span class="tag">~${w.ft} ft walk</span></div>`).join('')
       : '<div class="sub">No mapped walkway around to the rear. Check the alley ends on arrival.</div>';
     accessSub = `<small class="statsub">${callAccess.name ? esc(callAccess.name) + ' · ' : ''}${callAccess.street ? 'front on ' + esc(callAccess.street) : ''}</small>${ways}` +
-      `<small class="statsub">Yellow lines on map: front to rear by sidewalk and alley</small>`;
+      `<small class="statsub">Yellow line on map: front to rear by sidewalk and alley</small>`;
   }
 
   let haz = '<div class="loading">Checking hazard and vacant buildings…</div>', hazAlert = '';
