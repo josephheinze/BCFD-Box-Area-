@@ -1113,19 +1113,23 @@ async function loadNearHazards(seq) {
 
 function fitAll() {
   if (!call) return;
-  // Close-up on the address (A to C), plus the nearest hydrant if it's close
-  const b = new mapboxgl.LngLatBounds([call.lng, call.lat], [call.lng, call.lat]);
-  const h1 = Array.isArray(nearHydrants) && nearHydrants[0];
-  if (h1 && h1.ft <= 300) b.extend([h1.lng, h1.lat]);
-  if (callAccess && callAccess.front) b.extend(stepToward(callAccess.front, [call.lng, call.lat], 30));
-  if (callAccess && callAccess.pt) b.extend(callAccess.pt);
+  // Close-up centered on the building: frame A, B, C, D evenly around the address (nothing else pulls it off-center)
+  const c0 = [call.lng, call.lat];
+  const b = new mapboxgl.LngLatBounds(c0, c0);
+  if (callAccess && callAccess.front) {
+    const facing = bearing(callAccess.front, c0);
+    // farthest of A / C, plus room so the B and D houses aren't cut off
+    const reach = Math.max(feetBetween(c0, stepToward(callAccess.front, c0, 30)), callAccess.pt ? feetBetween(c0, callAccess.pt) : 0, 45) * 1.35 + 15;
+    // same distance out on all four sides, so the house stays in the middle
+    [0, 90, 180, 270].forEach(t => b.extend(offsetFeet(c0, (facing + t) % 360, reach)));
+  }
   const top = $('topbar').offsetHeight + 20;
   const wide = window.innerWidth >= 820;
   const bottom = wide ? 40 : Math.min($('sheet').offsetHeight, window.innerHeight * 0.5) + 20;
   const left = wide ? 420 : 40;
   // Turn the map so you're looking at the building from the street: A side at the bottom, C at the top
   const facing = callAccess && callAccess.front ? bearing(callAccess.front, [call.lng, call.lat]) : 0;
-  map.fitBounds(b, { padding: { top, bottom, left, right: 40 }, maxZoom: 19, duration: 700,
+  map.fitBounds(b, { padding: { top, bottom, left: Math.max(left, 20), right: 20 }, maxZoom: 18.7, duration: 700,
                      pitch: 0, bearing: facing });
 }
 
