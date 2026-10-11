@@ -518,11 +518,12 @@ function addOverlays() {
     layout: { 'line-cap': 'round', 'line-join': 'round' },
     paint: { 'line-color': '#fde047', 'line-width': ['interpolate', ['linear'], ['zoom'], 14, 3, 18, 6], 'line-dasharray': [1.5, 1] } });
   map.addLayer({ id: 'callalley-ends', type: 'circle', source: 'callalley', filter: ['==', ['geometry-type'], 'Point'],
-    paint: { 'circle-radius': 6, 'circle-color': '#fde047', 'circle-stroke-color': '#111', 'circle-stroke-width': 2 } });
+    paint: { 'circle-radius': ['case', ['==', ['length', ['get', 'label']], 1], 13, 18], 'circle-color': '#fde047',
+             'circle-stroke-color': '#111', 'circle-stroke-width': 2 } });
   map.addLayer({ id: 'callalley-labels', type: 'symbol', source: 'callalley', filter: ['==', ['geometry-type'], 'Point'],
-    layout: { 'text-field': ['get', 'label'], 'text-size': 13, 'text-offset': [0, -1.2], 'text-anchor': 'bottom',
-              'text-font': ['DIN Pro Bold', 'Arial Unicode MS Bold'], 'text-allow-overlap': true },
-    paint: { 'text-color': '#fde047', 'text-halo-color': '#000', 'text-halo-width': 2 } });
+    layout: { 'text-field': ['get', 'label'], 'text-size': 16, 'text-anchor': 'center',
+              'text-font': ['DIN Pro Bold', 'Arial Unicode MS Bold'], 'text-allow-overlap': true, 'text-ignore-placement': true },
+    paint: { 'text-color': '#111' } });
 
   map.addSource('vacant', { type: 'geojson', data: areaVacant });
   map.addSource('xray', { type: 'geojson', data: areaXray });
@@ -1035,14 +1036,27 @@ async function loadBuildingAndAccess(seq) {
 }
 
 // The only access line on the map: front of the building -> address -> rear alley
+// Point `ft` feet from p in compass direction `deg`
+function offsetFeet(p, deg, ft) {
+  const r = deg * Math.PI / 180, dLat = ft / 364000;
+  return [p[0] + Math.sin(r) * dLat / Math.cos(p[1] * Math.PI / 180), p[1] + Math.cos(r) * dLat];
+}
+const ROWHOUSE_FT = 22;   // how far over the B and D labels sit (about one Baltimore rowhouse width)
+
+// The access line plus side labels: A front, B left, C rear, D right (as seen standing on the A side)
 function drawFrontBack() {
   const fc = { type: 'FeatureCollection', features: [] };
-  if (call && callAccess && callAccess.front && callAccess.pt) {
+  const mark = (label, c) => fc.features.push({ type: 'Feature', properties: { label }, geometry: { type: 'Point', coordinates: c } });
+  if (call && callAccess && callAccess.front) {
+    const center = [call.lng, call.lat];
+    const a = callAccess.frontWalk || stepToward(callAccess.front, center, 30);
+    const facing = bearing(callAccess.front, center);                 // looking at the building from the A side
     (callAccess.walks || []).forEach(w => fc.features.push({ type: 'Feature', properties: {}, geometry: w.geometry }));
-    fc.features.push({ type: 'Feature', properties: { label: 'FRONT' }, geometry: { type: 'Point', coordinates: callAccess.frontWalk || stepToward(callAccess.front, [call.lng, call.lat], 30) } });
-    fc.features.push({ type: 'Feature', properties: { label: callAccess.where === 'rear' ? 'REAR' : 'ALLEY' }, geometry: { type: 'Point', coordinates: callAccess.pt } });
-  } else if (call && callAccess && callAccess.front) {
-    fc.features.push({ type: 'Feature', properties: { label: 'FRONT' }, geometry: { type: 'Point', coordinates: stepToward(callAccess.front, [call.lng, call.lat], 30) } });
+    mark('A', a);
+    mark('B', offsetFeet(center, (facing + 270) % 360, ROWHOUSE_FT));  // dwelling to the left
+    mark('D', offsetFeet(center, (facing + 90) % 360, ROWHOUSE_FT));   // dwelling to the right
+    if (callAccess.pt) mark(callAccess.where === 'rear' ? 'C' : 'Alley', callAccess.pt);
+    else mark('C', offsetFeet(center, facing, 25));                    // no alley found: label the rear of the building
   }
   if (callAccess) callAccess.line = fc;
   setData('callalley', fc);
@@ -1166,7 +1180,7 @@ function renderSheet() {
           `<div class="walk">Shortest way: ${w.dir ? 'around the ' + esc(w.dir) : 'around the row'} <span class="tag">~${w.ft} ft walk</span></div>`).join('')
       : '<div class="sub">No mapped walkway around to the rear. Check the alley ends on arrival.</div>';
     accessSub = `<small class="statsub">${callAccess.name ? esc(callAccess.name) + ' · ' : ''}${callAccess.street ? 'front on ' + esc(callAccess.street) : ''}</small>${ways}` +
-      `<small class="statsub">Yellow line on map: front to rear by sidewalk and alley</small>`;
+      `<small class="statsub">Yellow line on map: A side to C side by sidewalk and alley · B left, D right</small>`;
   }
 
   let haz = '<div class="loading">Checking hazard and vacant buildings…</div>', hazAlert = '';
