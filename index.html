@@ -1250,7 +1250,7 @@ function computeSides() {
     const rmin = Math.min(...rs), rmax = Math.max(...rs), bmin = Math.min(...bs), bmax = Math.max(...bs);
     const at = (r, b) => [center[0] + (r * ax[0] + b * bx[0]) / (k * 364000), center[1] + (r * ax[1] + b * bx[1]) / 364000];
     const midB = (bmin + bmax) / 2;
-    const isRow = callBldgInfo && /rowhouse/i.test(callBldgInfo.text || '');
+    const isRow = callBldgInfo && /rowhouse|residential/i.test(callBldgInfo.text || '');   // "Residential (row or detached...)" counts too
     const wholeRow = isRow && (rmax - rmin) > 45;                     // one outline drawn for the whole row
     if (!wholeRow) {
       B = at(rmin - 10, midB);                                       // just off the left wall (the next house on a row)
@@ -1322,7 +1322,18 @@ async function loadBuildingInfo(seq) {
           .sort((a, b) => feetBetween(inPt, [a.geometry.x, a.geometry.y]) - feetBetween(inPt, [b.geometry.x, b.geometry.y]));
       }
       if (seq !== callSeq) return;
-      if (recs.length) { callBldgInfo = describeBuilding(recs[0].attributes || {}); if (callAccess && callAccess.front) drawFrontBack(); renderSheet(); return; }
+      if (recs.length) {
+        callBldgInfo = describeBuilding(recs[0].attributes || {});
+        // State record doesn't say row or detached: get floors and row position from the city's building outline
+        if (/not on record/.test(callBldgInfo.text)) {
+          try {
+            const city = await describeFromCity(pt, inPt);
+            if (seq !== callSeq) return;
+            if (city && /rowhouse|single-family/.test(city.text)) callBldgInfo = { text: city.text, detail: callBldgInfo.detail };
+          } catch (e) { /* keep the state description */ }
+        }
+        if (callAccess && callAccess.front) drawFrontBack(); renderSheet(); return;
+      }
       stateErr = stateErr || 'no record';
       break;                                   // server answered but had nothing; don't ask the other copy
     } catch (e) { stateErr = e.message || String(e); }
