@@ -1090,15 +1090,19 @@ async function loadBuildingAndAccess(seq) {
     if (!pick) callAccess = { none: true, street: front ? front.p.name : null, front: front ? front.c : null };
     else callAccess = { ft: pick.a.ft, dir: compass(bearing(center, pick.a.c)), where: pick.where, name: pick.a.p.name || '',
                         street: front ? front.p.name : null, front: front ? front.c : null, pt: pick.a.c, walks: null };
+    // The building's own outline, so B / C / D sit on its real sides (big buildings) or the neighbors (rowhouses)
+    try { callAccess.fp = await callFootprint(center); } catch (e) { callAccess.fp = null; }
+    if (seq !== callSeq) return;
     drawFrontBack();
     renderSheet();
     fitAll();
-    if (callAccess.front && callAccess.pt) {
+    const walkTo = callAccess.sides && callAccess.sides.walkTo;
+    if (callAccess.front && walkTo) {
       // FRONT = the sidewalk in front of the building (Alpha side), not the middle of the street
       callAccess.frontWalk = stepToward(callAccess.front, center, 30);
       const toBldg = bearing(callAccess.front, center);
       const dirs = [(toBldg + 90) % 360, (toBldg + 270) % 360];          // the two ways along the front sidewalk
-      const got = await Promise.all(dirs.map(d => walkRoute([callAccess.frontWalk, callAccess.pt], d)
+      const got = await Promise.all(dirs.map(d => walkRoute([callAccess.frontWalk, walkTo], d)
         .then(w => w && Object.assign(w, { via: '', dir: compass(d) + ' end of the row' })).catch(() => null)));
       let walks = got.filter(Boolean).filter(w => w.ft < 3000);
       // If both requests came back the same way, keep one
@@ -1107,7 +1111,7 @@ async function loadBuildingAndAccess(seq) {
         if (feetBetween(m(walks[0]), m(walks[1])) < 40) walks = [walks[0]];
       }
       if (!walks.length) {
-        const w = await walkRoute([callAccess.frontWalk, callAccess.pt]).catch(() => null);
+        const w = await walkRoute([callAccess.frontWalk, walkTo]).catch(() => null);
         if (w) walks = [Object.assign(w, { via: '', dir: '' })];
       }
       walks.sort((x, y) => x.ft - y.ft);
@@ -1132,19 +1136,67 @@ function offsetFeet(p, deg, ft) {
 const ROWHOUSE_FT = 22;   // how far over the B and D labels sit (about one Baltimore rowhouse width)
 
 // The access line plus side labels: A front, B left, C rear, D right (as seen standing on the A side)
+// The city's outline of the building at the address (the one under the pin, or the closest within ~60 ft)
+async function callFootprint(pt) {
+  const d = 0.0009, dLat = d * 0.77;
+  const res = await cityQuery(BUILDINGS_LAYER, { geometry: [pt[0] - d, pt[1] - dLat, pt[0] + d, pt[1] + dLat].join(','),
+    geometryType: 'esriGeometryEnvelope', inSR: '4326', spatialRel: 'esriSpatialRelIntersects', outFields: 'OBJECTID',
+    returnGeometry: 'true', geometryPrecision: '7' });
+  const c = (res.features || []).filter(f => f.geometry && f.geometry.rings && f.geometry.rings.length)
+    .map(f => { const g = esriToGeo(f.geometry.rings); return { g, ft: feetToPolygon(pt, g) }; })
+    .sort((a, b) => a.ft - b.ft)[0];
+  return c && c.ft <= 60 ? c.g : null;
+}
+
+// Where A, B, C, D go (and where the walking line should end), seen standing on the A side
+function computeSides() {
+  const center = [call.lng, call.lat];
+  const A = callAccess.frontWalk || stepToward(callAccess.front, center, 30);
+  const facing = bearing(callAccess.front, center), right = (facing + 90) % 360;
+  const alleyRear = callAccess.pt && callAccess.where === 'rear';
+  // Default (no outline): neighbors ~one rowhouse over, C at the alley or just behind the pin
+  let B = offsetFeet(center, (facing + 270) % 360, ROWHOUSE_FT), D = offsetFeet(center, right, ROWHOUSE_FT);
+  let C = callAccess.pt || offsetFeet(center, facing, 25), cLabel = callAccess.pt ? (alleyRear ? 'C' : 'Alley') : 'C';
+  let walkTo = callAccess.pt || null;
+  const g = callAccess.fp;
+  if (g) {
+    // measure the outline in feet: across (left/right) and deep (front/back)
+    const k = Math.cos(center[1] * Math.PI / 180);
+    const ax = [Math.sin(right * Math.PI / 180), Math.cos(right * Math.PI / 180)];
+    const bx = [Math.sin(facing * Math.PI / 180), Math.cos(facing * Math.PI / 180)];
+    const toFt = v => [(v[0] - center[0]) * k * 364000, (v[1] - center[1]) * 364000];
+    const vs = (g.type === 'Polygon' ? [g.coordinates] : g.coordinates).flatMap(p => p[0]).map(toFt);
+    const rs = vs.map(v => v[0] * ax[0] + v[1] * ax[1]), bs = vs.map(v => v[0] * bx[0] + v[1] * bx[1]);
+    const rmin = Math.min(...rs), rmax = Math.max(...rs), bmin = Math.min(...bs), bmax = Math.max(...bs);
+    const at = (r, b) => [center[0] + (r * ax[0] + b * bx[0]) / (k * 364000), center[1] + (r * ax[1] + b * bx[1]) / 364000];
+    const midB = (bmin + bmax) / 2;
+    const isRow = callBldgInfo && /rowhouse/i.test(callBldgInfo.text || '');
+    const wholeRow = isRow && (rmax - rmin) > 45;                     // one outline drawn for the whole row
+    if (!wholeRow) {
+      B = at(rmin - 10, midB);                                       // just off the left wall (the next house on a row)
+      D = at(rmax + 10, midB);                                       // just off the right wall
+    }
+    // C: the alley if it's right behind the building (rowhouses); otherwise the building's rear wall
+    const alleyBack = alleyRear ? (toFt(callAccess.pt)[0] * bx[0] + toFt(callAccess.pt)[1] * bx[1]) : null;
+    const big = !isRow && (rmax - rmin) > 45;                         // apartment / commercial: C goes on the rear wall
+    if (alleyRear && alleyBack - bmax <= 120 && !big) { C = callAccess.pt; cLabel = 'C'; walkTo = callAccess.pt; }
+    else {
+      C = at(wholeRow ? 0 : (rmin + rmax) / 2, bmax + 10); cLabel = 'C';
+      walkTo = alleyRear && alleyBack >= bmax - 5 && alleyBack - bmax <= 120 ? callAccess.pt : C;   // walk to the alley if it's behind
+    }
+  }
+  return { A, B, C, D, cLabel, walkTo };
+}
+
+// The access line plus side labels: A front, B left, C rear, D right (as seen standing on the A side)
 function drawFrontBack() {
   const fc = { type: 'FeatureCollection', features: [] };
   const mark = (label, c) => fc.features.push({ type: 'Feature', properties: { label }, geometry: { type: 'Point', coordinates: c } });
   if (call && callAccess && callAccess.front) {
-    const center = [call.lng, call.lat];
-    const a = callAccess.frontWalk || stepToward(callAccess.front, center, 30);
-    const facing = bearing(callAccess.front, center);                 // looking at the building from the A side
+    const sd = computeSides();
+    callAccess.sides = sd;
     (callAccess.walks || []).forEach(w => fc.features.push({ type: 'Feature', properties: {}, geometry: w.geometry }));
-    mark('A', a);
-    mark('B', offsetFeet(center, (facing + 270) % 360, ROWHOUSE_FT));  // dwelling to the left
-    mark('D', offsetFeet(center, (facing + 90) % 360, ROWHOUSE_FT));   // dwelling to the right
-    if (callAccess.pt) mark(callAccess.where === 'rear' ? 'C' : 'Alley', callAccess.pt);
-    else mark('C', offsetFeet(center, facing, 25));                    // no alley found: label the rear of the building
+    mark('A', sd.A); mark('B', sd.B); mark('D', sd.D); mark(sd.cLabel, sd.C);
   }
   if (callAccess) callAccess.line = fc;
   setData('callalley', fc);
@@ -1178,7 +1230,7 @@ async function loadBuildingInfo(seq) {
           .sort((a, b) => feetBetween(pt, [a.geometry.x, a.geometry.y]) - feetBetween(pt, [b.geometry.x, b.geometry.y]));
       }
       if (seq !== callSeq) return;
-      if (recs.length) { callBldgInfo = describeBuilding(recs[0].attributes || {}); renderSheet(); return; }
+      if (recs.length) { callBldgInfo = describeBuilding(recs[0].attributes || {}); if (callAccess && callAccess.front) drawFrontBack(); renderSheet(); return; }
       stateErr = stateErr || 'no record';
       break;                                   // server answered but had nothing; don't ask the other copy
     } catch (e) { stateErr = e.message || String(e); }
@@ -1188,6 +1240,7 @@ async function loadBuildingInfo(seq) {
     const info = await describeFromCity(pt);
     if (seq !== callSeq) return;
     callBldgInfo = info || { none: true };
+    if (callAccess && callAccess.front) drawFrontBack();
   } catch (e) {
     if (seq !== callSeq) return;
     callBldgInfo = { error: stateErr ? `state: ${stateErr}; city: ${e.message || e}` : (e.message || String(e)) };
@@ -1311,7 +1364,9 @@ function fitAll() {
   const facing = callAccess && callAccess.front ? bearing(callAccess.front, c0) : 0;   // A side at the bottom, C at the top
   if (callAccess && callAccess.front) {
     // farthest of A / C, plus room so the B and D houses aren't cut off
-    const reach = Math.max(feetBetween(c0, stepToward(callAccess.front, c0, 30)), callAccess.pt ? feetBetween(c0, callAccess.pt) : 0, 45) * 1.35 + 15;
+    const marks = callAccess.sides ? [callAccess.sides.A, callAccess.sides.B, callAccess.sides.C, callAccess.sides.D]
+                                   : [stepToward(callAccess.front, c0, 30)].concat(callAccess.pt ? [callAccess.pt] : []);
+    const reach = Math.max(...marks.map(m => feetBetween(c0, m)), 45) * 1.35 + 15;
     [0, 90, 180, 270].forEach(t => b.extend(offsetFeet(c0, (facing + t) % 360, reach)));
   }
   const wide = window.innerWidth >= 820;
