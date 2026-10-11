@@ -715,14 +715,28 @@ async function onRoofs(feats) {
   } catch (e) { console.error(e); return feats; }
 }
 
+// Two flags on the same building (X + V, X + D...) would stack and their letters print on top of each other.
+// Spread stacked dots side by side so every letter can be read.
+function showHazards() {
+  const placed = [];
+  const spread = fc => ({ type: 'FeatureCollection', features: fc.features.map(f => {
+    let c = f.geometry.coordinates.slice(), n = 0;
+    while (n < 6 && placed.some(q => feetBetween(q, c) < 14)) { n++; c = offsetFeet(f.geometry.coordinates, 90, 22 * n); }
+    placed.push(c);
+    return n ? Object.assign({}, f, { geometry: { type: 'Point', coordinates: c } }) : f;
+  }) });
+  setData('xray', spread(areaXray));
+  setData('vacant', spread(areaVacant));
+}
+
 async function loadAreaHazards() {
   if (!window.map) return;
   const z = map.getZoom(), b = map.getBounds(), box = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()];
   if (z >= 14) pointsInBox(XRAY_SVC, 0, ...box).then(async f => {
-    areaXray = toFC(f); setData('xray', areaXray);                      // show right away...
-    if (z >= 15.5) { areaXray = toFC(await onRoofs(f)); setData('xray', areaXray); }   // ...then move onto the roofs
+    areaXray = toFC(f); showHazards();                                  // show right away...
+    if (z >= 15.5) { areaXray = toFC(await onRoofs(f)); showHazards(); }   // ...then move onto the roofs
   }).catch(e => console.error(e));
-  if (z >= 15.5) pointsInBox(VACANT_SVC, 1, ...box).then(f => { areaVacant = toFC(f); setData('vacant', areaVacant); }).catch(e => console.error(e));
+  if (z >= 15.5) pointsInBox(VACANT_SVC, 1, ...box).then(f => { areaVacant = toFC(f); showHazards(); }).catch(e => console.error(e));
 }
 
 async function loadAreaHydrants() {
