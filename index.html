@@ -1389,8 +1389,8 @@ async function describeFromCity(pt, inPt) {
     }
   }
   let text;
-  if (/COMM|STORE|OFFICE|RETAIL|INDUST|WAREH|CHURCH|SCHOOL|EXEMPT/.test(desc)) text = `${st}${clean(prop.PROPDESC).toLowerCase()}`;
-  else if (/APT|APART/.test(desc)) text = `${st}apartment building`;
+  if (/APT|APART/.test(desc)) text = `${st}apartment building`;
+  else if (/COMM|STORE|OFFICE|RETAIL|INDUST|WAREH|CHURCH|SCHOOL/.test(desc)) text = `Commercial: ${clean(prop.PROPDESC)}`;
   else if (pos === 'middle') text = `${st}middle-of-group rowhouse`;
   else if (pos === 'end') text = `${st}end-of-group rowhouse`;
   else if (pos === 'large' || (pos === 'detached' && stories >= 4)) text = `${st}large building · apartments or commercial (type not on record)`;
@@ -1414,10 +1414,7 @@ function describeBuilding(a) {
     : /stone/.test(cn) ? (woodish ? 'stone and frame' : 'stone')
     : woodish ? 'wood frame' : /block/.test(cn) ? 'block' : /stucco/.test(cn) ? 'stucco' : '';
   let text;
-  const use = [a.DESCCIUSE, a.DESCBLDG, a.DESCSTYL, a.DESCLU].map(clean).find(Boolean) || '';
-  if (/church|school|commercial|industrial|retail|office|exempt|institutional|warehouse|store|garage|hospital|community/.test(words)) {
-    text = `${st}${use.toLowerCase()}`;                                  // what the record says it is (church, store, school...)
-  } else if (/high.?rise|apartment|elevator|garden apt/.test(words)) {
+  if (/high.?rise|apartment|elevator|garden apt/.test(words)) {
     text = `${st}apartment building${/condo/.test(words) ? ' (condos)' : ''}`;
   } else if (/end unit|end of group|end group|end row/.test(words)) {
     text = `${st}end-of-group rowhouse`;
@@ -1429,10 +1426,12 @@ function describeBuilding(a) {
     text = `${st}single-family`;
   } else if (/residential|dwelling/.test(words)) {
     text = `${st}residential (row or detached not on record)`;
+  } else if (/commercial|industrial|retail|office|exempt|institutional/.test(words)) {
+    text = `Commercial: ${clean(a.DESCCIUSE) || clean(a.DESCLU) || 'type not recorded'}`;
   } else {
     text = clean(a.DESCLU) || 'Building type not recorded';
   }
-  if (constr) text += /single-family$/.test(text) ? `, ${constr}` : ` · ${constr}`;
+  if (constr && !/^Commercial/.test(text)) text += /single-family$/.test(text) ? `, ${constr}` : ` · ${constr}`;
   const yr = parseInt(a.YEARBLT, 10);
   const detail = [clean(a.ADDRESS), yr > 1700 ? `built ${yr}` : '', [clean(a.DESCSTYL), clean(a.DESCBLDG), clean(a.DESCCNST)].filter(Boolean).join(' / ')]
     .filter(Boolean).join(' · ');
