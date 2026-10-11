@@ -700,23 +700,20 @@ async function onRoofs(feats) {
     const pts = feats.map(f => [f.geometry.x, f.geometry.y]);
     const d = await cityQuery(BUILDINGS_LAYER, {
       geometry: JSON.stringify({ points: pts, spatialReference: { wkid: 4326 } }), geometryType: 'esriGeometryMultipoint',
-      inSR: '4326', spatialRel: 'esriSpatialRelIntersects', distance: '60', units: 'esriSRUnit_Foot',
+      inSR: '4326', spatialRel: 'esriSpatialRelIntersects', distance: '100', units: 'esriSRUnit_Foot',
       outFields: 'OBJECTID', returnGeometry: 'true', geometryPrecision: '7' });
     const bldgs = (d.features || []).filter(b => b.geometry && b.geometry.rings && b.geometry.rings.length).map(b => esriToGeo(b.geometry.rings));
     if (!bldgs.length) return feats;
+    // One rule: if the dot isn't on a building, move it onto the closest building, just inside its wall
     return feats.map(f => {
       const p = [f.geometry.x, f.geometry.y];
+      if (bldgs.some(g => pointInGeo(p, g))) return f;
       let best = null, bestFt = Infinity;
       bldgs.forEach(g => { const ft = feetToPolygon(p, g); if (ft < bestFt) { bestFt = ft; best = g; } });
-      if (!best || bestFt > 25) return f;                              // entrance points sit at the front wall; farther = not this building
-      let c;
-      if (polyAreaFt(best) < 3500) c = labelPoint(best);               // one house: put it in the middle of the roof
-      else if (bestFt === 0) return f;                                   // already on a big outline (a whole row): leave it on its own house
-      else {                                                             // just inside the wall nearest the entrance, on its own house
-        const q = nearestOnPolygon(p, best), r = offsetFeet(q, bearing(p, q), 12);
-        c = pointInGeo(r, best) ? r : q;
-      }
-      return c ? Object.assign({}, f, { geometry: { x: c[0], y: c[1] } }) : f;
+      if (!best) return f;
+      const q = nearestOnPolygon(p, best);
+      const c = [6, 4, 2, 1].map(ft => offsetFeet(q, bearing(p, q), ft)).find(r => pointInGeo(r, best)) || q;
+      return Object.assign({}, f, { geometry: { x: c[0], y: c[1] } });
     });
   } catch (e) { console.error(e); return feats; }
 }
