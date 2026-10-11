@@ -708,25 +708,61 @@ async function onRoofs(feats) {
       const p = [f.geometry.x, f.geometry.y];
       let best = null, bestFt = Infinity;
       bldgs.forEach(g => { const ft = feetToPolygon(p, g); if (ft < bestFt) { bestFt = ft; best = g; } });
-      if (!best || bestFt > 60) return f;
-      const c = labelPoint(best);
-      return Object.assign({}, f, { geometry: { x: c[0], y: c[1] } });
+      if (!best || bestFt > 25) return f;                              // entrance points sit at the front wall; farther = not this building
+      let c;
+      if (polyAreaFt(best) < 3500) c = labelPoint(best);               // one house: put it in the middle of the roof
+      else if (bestFt === 0) return f;                                   // already on a big outline (a whole row): leave it on its own house
+      else {                                                             // just inside the wall nearest the entrance, on its own house
+        const q = nearestOnPolygon(p, best), r = offsetFeet(q, bearing(p, q), 12);
+        c = pointInGeo(r, best) ? r : q;
+      }
+      return c ? Object.assign({}, f, { geometry: { x: c[0], y: c[1] } }) : f;
     });
   } catch (e) { console.error(e); return feats; }
 }
 
-// Two flags on the same building (X + V, X + D...) would stack and their letters print on top of each other.
-// Spread stacked dots side by side so every letter can be read.
+function polyAreaFt(g) {
+  const r = (g.type === 'Polygon' ? g.coordinates : g.coordinates[0])[0], k = Math.cos(r[0][1] * Math.PI / 180);
+  let a = 0;
+  for (let i = 0; i < r.length - 1; i++) a += ((r[i][0] - r[0][0]) * k) * (r[i + 1][1] - r[0][1]) - ((r[i + 1][0] - r[0][0]) * k) * (r[i][1] - r[0][1]);
+  return Math.abs(a) / 2 * 364000 * 364000;
+}
+function nearestOnPolygon(pt, g) {
+  const k = Math.cos(pt[1] * Math.PI / 180);
+  let best = null, bestD = Infinity;
+  (g.type === 'Polygon' ? [g.coordinates] : g.coordinates).forEach(poly => poly.forEach(r => {
+    for (let i = 0; i < r.length - 1; i++) {
+      const ax = (r[i][0] - pt[0]) * k, ay = r[i][1] - pt[1], bx = (r[i + 1][0] - pt[0]) * k, by = r[i + 1][1] - pt[1];
+      const dx = bx - ax, dy = by - ay, L = dx * dx + dy * dy, t = L ? Math.max(0, Math.min(1, -(ax * dx + ay * dy) / L)) : 0;
+      const d = Math.hypot(ax + t * dx, ay + t * dy);
+      if (d < bestD) { bestD = d; best = [r[i][0] + t * (r[i + 1][0] - r[i][0]), r[i][1] + t * (r[i + 1][1] - r[i][1])]; }
+    }
+  }));
+  return best;
+}
+
+// One dot per flag per house: repeat records of the same flag on the same spot become one dot.
+// If two different flags share a house (X + V, X + D), the second sits right beside the first so both letters read.
 function showHazards() {
+  const typeOf = f => String((f.properties && f.properties.szType) || 'V').toUpperCase();
+  const dedupe = fc => {
+    const keep = [];
+    fc.features.forEach(f => { if (!keep.some(k => typeOf(k) === typeOf(f) && feetBetween(k.geometry.coordinates, f.geometry.coordinates) < 12)) keep.push(f); });
+    return keep;
+  };
   const placed = [];
-  const spread = fc => ({ type: 'FeatureCollection', features: fc.features.map(f => {
-    let c = f.geometry.coordinates.slice(), n = 0;
-    while (n < 6 && placed.some(q => feetBetween(q, c) < 14)) { n++; c = offsetFeet(f.geometry.coordinates, 90, 22 * n); }
+  const nudge = feats => ({ type: 'FeatureCollection', features: feats.map(f => {
+    const c0 = f.geometry.coordinates;
+    let c = c0;
+    for (const deg of [90, 270, 0, 180]) {                             // one step to a side, never a chain
+      if (!placed.some(q => feetBetween(q, c) < 12)) break;
+      c = offsetFeet(c0, deg, 14);
+    }
     placed.push(c);
-    return n ? Object.assign({}, f, { geometry: { type: 'Point', coordinates: c } }) : f;
+    return c === c0 ? f : Object.assign({}, f, { geometry: { type: 'Point', coordinates: c } });
   }) });
-  setData('xray', spread(areaXray));
-  setData('vacant', spread(areaVacant));
+  setData('xray', nudge(dedupe(areaXray)));
+  setData('vacant', nudge(dedupe(areaVacant)));
 }
 
 async function loadAreaHazards() {
