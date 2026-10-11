@@ -522,11 +522,10 @@ function addOverlays() {
     layout: { 'line-cap': 'round', 'line-join': 'round' },
     paint: { 'line-color': '#fde047', 'line-width': ['interpolate', ['linear'], ['zoom'], 14, 3, 18, 6], 'line-dasharray': [1.5, 1] } });
   map.addLayer({ id: 'callalley-ends', type: 'circle', source: 'callalley', filter: ['==', ['geometry-type'], 'Point'],
-    paint: { 'circle-radius': ['case', ['==', ['length', ['get', 'label']], 1],
-               ['interpolate', ['linear'], ['zoom'], 15.5, 6, 18, 11], ['interpolate', ['linear'], ['zoom'], 15.5, 11, 18, 17]],
+    paint: { 'circle-radius': ['case', ['==', ['length', ['get', 'label']], 1], 11, 17],   // same size as the hydrant dots
              'circle-color': '#fde047', 'circle-stroke-color': '#111', 'circle-stroke-width': 1.5 } });
   map.addLayer({ id: 'callalley-labels', type: 'symbol', source: 'callalley', filter: ['==', ['geometry-type'], 'Point'],
-    layout: { 'text-field': ['get', 'label'], 'text-size': ['interpolate', ['linear'], ['zoom'], 15.5, 9, 18, 13], 'text-anchor': 'center',
+    layout: { 'text-field': ['get', 'label'], 'text-size': 13, 'text-anchor': 'center',
               'text-font': ['DIN Pro Bold', 'Arial Unicode MS Bold'], 'text-allow-overlap': true, 'text-ignore-placement': true },
     paint: { 'text-color': '#111' } });
 
