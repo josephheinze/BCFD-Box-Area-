@@ -1473,7 +1473,7 @@ function fitAll() {
   let zoom = 18.7;
   try {
     const cam = map.cameraForBounds(b, { padding, bearing: facing, maxZoom: 18.7 });
-    if (cam && isFinite(cam.zoom)) zoom = Math.min(cam.zoom, 18.7);
+    if (cam && isFinite(cam.zoom)) zoom = Math.max(Math.min(cam.zoom, 18.7), 17);   // a call always opens close up
   } catch (e) { /* keep the default */ }
 
   // Only if hydrant #1 would fall off screen at that zoom, zoom out just enough to show it (house stays centered)
@@ -1486,7 +1486,7 @@ function fitAll() {
     const halfH = (window.innerHeight - padding.top - padding.bottom) / 2 - margin;
     const ftPerPx = Math.max(right / Math.max(halfW, 40), up / Math.max(halfH, 40));
     const fitZoom = Math.log2(78271.517 * Math.cos(c0[1] * Math.PI / 180) * 3.281 / ftPerPx);
-    if (isFinite(fitZoom) && fitZoom < zoom) zoom = fitZoom;
+    if (isFinite(fitZoom) && fitZoom < zoom) zoom = Math.max(fitZoom, 17);   // never zoom out past a close street view for a hydrant
   }
   map.easeTo({ center: c0, zoom, bearing: facing, pitch: 0, padding, duration: 700 });
 }
