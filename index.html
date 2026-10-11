@@ -1159,7 +1159,7 @@ async function loadBuildingAndAccess(seq) {
                         street: front ? front.p.name : null, front: front ? front.c : null, pt: pick.a.c, walks: null };
     // The building's own outline, so B / C / D sit on its real sides (big buildings) or the neighbors (rowhouses)
     try { callAccess.fp = await callFootprint(center); } catch (e) { callAccess.fp = null; }
-    callAccess.parcel = await callParcel(center);
+    callAccess.props = await nearbyProperties(center);
     if (seq !== callSeq) return;
     drawFrontBack();
     renderSheet();
@@ -1206,20 +1206,19 @@ const ROWHOUSE_FT = 22;   // how far over the B and D labels sit (about one Balt
 // The access line plus side labels: A front, B left, C rear, D right (as seen standing on the A side)
 // The city's outline of the building at the address: the building under the pin
 // (a typed address that lands just off a building uses the closest one within ~60 ft)
-// The property lot at the address (Real Property). Attached buildings can share one city outline;
-// the lot says which part of it is this address.
-function callParcel(pt) {
-  const key = pt.join(',');
-  if (call && call._parcelKey === key) return call._parcel;
-  const p = cityQuery(12, { geometry: key, geometryType: 'esriGeometryPoint', inSR: '4326', spatialRel: 'esriSpatialRelIntersects',
-      distance: '40', units: 'esriSRUnit_Foot', outFields: 'FULLADDR', returnGeometry: 'true', geometryPrecision: '7' }, VACANT_SVC)
-    .then(res => {
-      const c = (res.features || []).filter(f => f.geometry && f.geometry.rings && f.geometry.rings.length)
-        .map(f => { const g = esriToGeo(f.geometry.rings); return { g, ft: feetToPolygon(pt, g) }; }).sort((a, b) => a.ft - b.ft)[0];
-      return c ? c.g : null;
-    }).catch(() => null);
-  if (call) { call._parcelKey = key; call._parcel = p; }
-  return p;
+// The state's property points near the call (one point per address). Used to find the addresses next door,
+// because the city sometimes draws attached buildings as one outline.
+async function nearbyProperties(pt) {
+  for (const src of MD_PROPERTY_SOURCES) {
+    try {
+      const d = await cityQuery(0, { geometry: `${pt[0]},${pt[1]}`, geometryType: 'esriGeometryPoint', inSR: '4326',
+        spatialRel: 'esriSpatialRelIntersects', distance: '200', units: 'esriSRUnit_Foot', where: '1=1',
+        outFields: 'ADDRESS', returnGeometry: 'true' }, src);
+      return (d.features || []).filter(f => f.geometry && isFinite(f.geometry.x))
+        .map(f => ({ addr: clean(f.attributes && f.attributes.ADDRESS).toUpperCase(), c: [f.geometry.x, f.geometry.y] }));
+    } catch (e) { /* try the other copy */ }
+  }
+  return null;
 }
 
 async function callFootprint(pt) {
@@ -1265,19 +1264,10 @@ function computeSides() {
     const vs = (g.type === 'Polygon' ? [g.coordinates] : g.coordinates).flatMap(p => p[0]).map(toFt);
     const rs = vs.map(v => v[0] * ax[0] + v[1] * ax[1]), bs = vs.map(v => v[0] * bx[0] + v[1] * bx[1]);
     let rmin = Math.min(...rs), rmax = Math.max(...rs), bmin = Math.min(...bs), bmax = Math.max(...bs);
-    let onLot = false;                                                // trim to this address's lot (attached buildings share one outline)
-    if (callAccess.parcel) {
-      const P = callAccess.parcel, pv = (P.type === 'Polygon' ? [P.coordinates] : P.coordinates).flatMap(q => q[0]).map(toFt);
-      const prs = pv.map(v => v[0] * ax[0] + v[1] * ax[1]), pbs = pv.map(v => v[0] * bx[0] + v[1] * bx[1]);
-      const r0 = Math.max(rmin, Math.min(...prs)), r1 = Math.min(rmax, Math.max(...prs));
-      const b0 = Math.max(bmin, Math.min(...pbs)), b1 = Math.min(bmax, Math.max(...pbs));
-      if (r1 - r0 > 5) { rmin = r0; rmax = r1; onLot = true; }
-      if (b1 - b0 > 5) { bmin = b0; bmax = b1; }
-    }
     const at = (r, b) => [center[0] + (r * ax[0] + b * bx[0]) / (k * 364000), center[1] + (r * ax[1] + b * bx[1]) / 364000];
     const midB = (bmin + bmax) / 2;
     const isRow = callBldgInfo && /rowhouse|residential/i.test(callBldgInfo.text || '');   // "Residential (row or detached...)" counts too
-    const wholeRow = !onLot && isRow && (rmax - rmin) > 45;                     // one outline drawn for the whole row
+    const wholeRow = isRow && (rmax - rmin) > 45;                     // one outline drawn for the whole row
     if (!wholeRow) {
       const off = Math.min((rmax - rmin) / 2, 15);                   // the middle of the house next door on a row
       B = at(rmin - off, midB);
@@ -1286,8 +1276,26 @@ function computeSides() {
       B = at(-ROWHOUSE_FT, midB);                                    // one outline for the whole row: the houses on either side
       D = at(ROWHOUSE_FT, midB);
     }
+    // The addresses next door (state property points, this side of the street). If the next address sits inside
+    // this same outline, the city drew attached buildings as one shape: put B / D on that next address instead.
+    let cAcross = wholeRow ? 0 : (rmin + rmax) / 2;
+    if (callAccess.props && callAccess.props.length && !/apartment/i.test((callBldgInfo && callBldgInfo.text) || '')) {
+      const num = ((call.label || '').match(/^\s*(\d+)/) || [])[1];
+      const f = toFt(callAccess.front), frontB = f[0] * bx[0] + f[1] * bx[1];
+      const pts = callAccess.props.map(p => { const v = toFt(p.c); return { addr: p.addr, r: v[0] * ax[0] + v[1] * ax[1], b: v[0] * bx[0] + v[1] * bx[1] }; })
+        .filter(p => p.b > frontB + 5 && p.b < bmax + 30);              // this side of the street only
+      const own = (num && pts.find(p => p.addr.startsWith(num + ' '))) || pts.slice().sort((x, y) => Math.hypot(x.r, x.b) - Math.hypot(y.r, y.b))[0];
+      if (own) {
+        const left = pts.filter(p => p.r < own.r - 4).sort((x, y) => y.r - x.r)[0];
+        const right = pts.filter(p => p.r > own.r + 4).sort((x, y) => x.r - y.r)[0];
+        let used = false;
+        if (left && left.r > rmin) { B = at(left.r, midB); used = true; }
+        if (right && right.r < rmax) { D = at(right.r, midB); used = true; }
+        if (used) cAcross = own.r;
+      }
+    }
     // C = the back of the building: straight back from A, just past the rear wall
-    C = at(wholeRow ? 0 : (rmin + rmax) / 2, bmax + 10); cLabel = 'C'; walkTo = C;
+    C = at(cAcross, bmax + 10); cLabel = 'C'; walkTo = C;
   }
   return { A, B, C, D, cLabel, walkTo };
 }
