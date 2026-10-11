@@ -704,15 +704,18 @@ async function onRoofs(feats) {
       outFields: 'OBJECTID', returnGeometry: 'true', geometryPrecision: '7' });
     const bldgs = (d.features || []).filter(b => b.geometry && b.geometry.rings && b.geometry.rings.length).map(b => esriToGeo(b.geometry.rings));
     if (!bldgs.length) return feats;
-    // One rule: if the dot isn't on a building, move it onto the closest building, just inside its wall
+    // One rule: if the dot isn't on a building, move it onto the middle of the closest building
     return feats.map(f => {
       const p = [f.geometry.x, f.geometry.y];
       if (bldgs.some(g => pointInGeo(p, g))) return f;
       let best = null, bestFt = Infinity;
       bldgs.forEach(g => { const ft = feetToPolygon(p, g); if (ft < bestFt) { bestFt = ft; best = g; } });
       if (!best) return f;
-      const q = nearestOnPolygon(p, best);
-      const c = [6, 4, 2, 1].map(ft => offsetFeet(q, bearing(p, q), ft)).find(r => pointInGeo(r, best)) || q;
+      // walk straight through the building from the nearest wall and put the dot halfway across
+      const q = nearestOnPolygon(p, best), dir = bearing(p, q);
+      let far = null;
+      for (let ft = 1; ft <= 300; ft += 1) { const r = offsetFeet(q, dir, ft); if (pointInGeo(r, best)) far = ft; else if (far) break; }
+      const c = far ? offsetFeet(q, dir, far / 2) : q;
       return Object.assign({}, f, { geometry: { x: c[0], y: c[1] } });
     });
   } catch (e) { console.error(e); return feats; }
