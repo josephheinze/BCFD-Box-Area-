@@ -1188,6 +1188,11 @@ function computeSides() {
   return { A, B, C, D, cLabel, walkTo };
 }
 
+// The A-to-C walking line and distance only make sense on rowhouses and single-family homes
+function walkOK() {
+  return !!(callBldgInfo && callBldgInfo.text && /rowhouse|single-family|row or detached/i.test(callBldgInfo.text));
+}
+
 // The access line plus side labels: A front, B left, C rear, D right (as seen standing on the A side)
 function drawFrontBack() {
   const fc = { type: 'FeatureCollection', features: [] };
@@ -1195,7 +1200,7 @@ function drawFrontBack() {
   if (call && callAccess && callAccess.front) {
     const sd = computeSides();
     callAccess.sides = sd;
-    (callAccess.walks || []).forEach(w => fc.features.push({ type: 'Feature', properties: {}, geometry: w.geometry }));
+    (walkOK() ? callAccess.walks || [] : []).forEach(w => fc.features.push({ type: 'Feature', properties: {}, geometry: w.geometry }));
     mark('A', sd.A); mark('B', sd.B); mark('D', sd.D); mark(sd.cLabel, sd.C);
   }
   if (callAccess) callAccess.line = fc;
@@ -1497,12 +1502,14 @@ function renderSheet() {
   else if (callAccess && callAccess.none) { accessTxt = '<span style="font-size:14px">No alley mapped within ~230 ft</span>'; }
   else if (callAccess) {
     accessTxt = `${callAccess.where === 'rear' ? 'Rear alley' : callAccess.where === 'side' ? 'Side alley' : 'Alley'} ~${callAccess.ft} ft ${callAccess.dir}`;
-    const ways = callAccess.walks == null ? '<div class="sub loading">Finding the ways around back…</div>'
+    const showWalk = walkOK();
+    const ways = !showWalk ? ''
+      : callAccess.walks == null ? '<div class="sub loading">Finding the ways around back…</div>'
       : callAccess.walks.length ? callAccess.walks.map((w, i) =>
           `<div class="walk">Shortest way: ${w.dir ? 'around the ' + esc(w.dir) : 'around the row'} <span class="tag">~${w.ft} ft walk</span></div>`).join('')
       : '<div class="sub">No mapped walkway around to the rear. Check the alley ends on arrival.</div>';
     accessSub = `<small class="statsub">${callAccess.name ? esc(callAccess.name) + ' · ' : ''}${callAccess.street ? 'front on ' + esc(callAccess.street) : ''}</small>${ways}` +
-      `<small class="statsub">Yellow line on map: A side to C side by sidewalk and alley · B left, D right</small>`;
+      `<small class="statsub">${showWalk ? 'Yellow line on map: A side to C side by sidewalk and alley · ' : ''}B left, D right</small>`;
   }
 
   let haz = '<div class="loading">Checking hazard and vacant buildings…</div>', hazAlert = '';
