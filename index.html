@@ -1012,11 +1012,12 @@ async function setCall(pt) {
 
   const labelReady = pt.label ? Promise.resolve() :
     tapLabel(pt).then(l => { if (seq === callSeq && l) { call.label = l; renderSheet(); } }).catch(() => {});
-  runRoute();
   loadNearHydrants(seq);
   loadNearHazards(seq);
-  loadBuildingAndAccess(seq);
-  labelReady.then(() => { if (seq === callSeq) loadBuildingInfo(seq); });   // building record uses the address
+  labelReady.then(() => {                                             // route, A side and building record all use the address
+    if (seq !== callSeq) return;
+    runRoute(); loadBuildingAndAccess(seq); loadBuildingInfo(seq);
+  });
 }
 
 function clearCall() {
@@ -1037,9 +1038,8 @@ async function runRoute() {
     // Aim at the front of the building (the address's own street), not whatever road is nearest the pin
     let dest = [call.lng, call.lat], destDir = null;
     try {
-      const info = await roadsAround(call);
-      const front = frontOf(call, info);
-      if (front && front.ft <= 250) { dest = front.c; destDir = (bearing(front.c, [call.lng, call.lat]) + 90) % 360; }
+      const front = await frontStreet(call);
+      if (front && (front.ft <= 250 || streetCore(front.p.name) === streetCore(call.label))) { dest = front.c; destDir = (bearing(front.c, [call.lng, call.lat]) + 90) % 360; }
     } catch (e) { /* fall back to the pin */ }
     // Leave out the front of the firehouse: start on the street in the firehouse's address (e.g. W North Ave)
     let start = [o.lng, o.lat], startDir = null;
@@ -1149,11 +1149,12 @@ function streetCore(name) {
 }
 
 // One lookup per call of the roads around the address (Mapbox road data), shared by routing and access
-function roadsAround(c) {
-  if (c.roadsPromise) return c.roadsPromise;
+function roadsAround(c, radius = 70) {
+  const key = radius === 70 ? 'roadsPromise' : 'roadsPromise' + radius;
+  if (c[key]) return c[key];
   const url = `https://api.mapbox.com/v4/mapbox.mapbox-streets-v8/tilequery/${c.lng},${c.lat}.json` +
-    `?radius=70&limit=50&layers=road&geometry=linestring&dedupe=true&access_token=${MAPBOX_TOKEN}`;
-  c.roadsPromise = fetch(url).then(async r => {
+    `?radius=${radius}&limit=50&layers=road&geometry=linestring&dedupe=true&access_token=${MAPBOX_TOKEN}`;
+  c[key] = fetch(url).then(async r => {
     const d = await r.json();
     if (!r.ok) throw new Error(d.message || ('HTTP ' + r.status));
     const roads = (d.features || []).map(f => ({ p: f.properties || {}, c: f.geometry && f.geometry.coordinates,
@@ -1164,7 +1165,7 @@ function roadsAround(c) {
     const streets = roads.filter(isStreet).sort((a, b) => a.ft - b.ft);
     return { streets, alleys: roads.filter(isAlley).sort((a, b) => a.ft - b.ft) };
   });
-  return c.roadsPromise;
+  return c[key];
 }
 
 // Walking route (sidewalks, paths, alleys) through the given points; null if none
@@ -1186,6 +1187,18 @@ function stepToward(a, b, ft) {
 // Signed turn from bearing a to bearing b, -180..180
 const signedTurn = (a, b) => ((b - a + 540) % 360) - 180;
 // The front of the building: closest point on the street named in the address (else the nearest named street)
+// A always goes on the street in the address. If that street isn't within ~230 ft, look farther for it
+// (~650 ft) before falling back to the nearest street.
+async function frontStreet(c) {
+  const info = await roadsAround(c);
+  const core = streetCore(c.label);
+  if (!core) return info.streets[0] || null;
+  let named = info.streets.find(x => streetCore(x.p.name) === core);
+  if (!named) {
+    try { const wide = await roadsAround(c, 200); named = wide.streets.find(x => streetCore(x.p.name) === core); } catch (e) {}
+  }
+  return named || info.streets[0] || null;
+}
 function frontOf(c, info) {
   const core = streetCore(c.label);
   const named = core ? info.streets.find(x => streetCore(x.p.name) === core) : null;
@@ -1199,7 +1212,7 @@ async function loadBuildingAndAccess(seq) {
   try {
     const info = await roadsAround(call);
     if (seq !== callSeq) return;
-    const front = frontOf(call, info);
+    const front = await frontStreet(call);
     // Prefer an alley on the opposite side from the front street (true rear); else the nearest alley
     const withSide = info.alleys.map(a => {
       const gap = front ? angleGap(bearing(center, a.c), bearing(center, front.c)) : null;
@@ -1211,6 +1224,7 @@ async function loadBuildingAndAccess(seq) {
                         street: front ? front.p.name : null, front: front ? front.c : null, pt: pick.a.c, walks: null };
     // The building's own outline, so B / C / D sit on its real sides (big buildings) or the neighbors (rowhouses)
     try { callAccess.fp = await callFootprint(center); } catch (e) { callAccess.fp = null; }
+    callAccess.props = await nearbyProperties(center);
     if (seq !== callSeq) return;
     drawFrontBack();
     renderSheet();
@@ -1298,39 +1312,45 @@ function insidePoint(g, pt) {
 
 // Where A, B, C, D go (and where the walking line should end), seen standing on the A side
 function computeSides() {
-  // This morning's settings: A at the front, B / D one house over on each side of the pin (ROWHOUSE_FT)
+  // The dots go against the sides of the building at the address:
+  // A = middle of the front wall (address's street side), C = middle of the back wall,
+  // B = middle of the left wall, D = middle of the right wall (as seen standing on the A side).
   const center = [call.lng, call.lat];
-  const A = callAccess.frontWalk || stepToward(callAccess.front, center, 30);
-  const facing = bearing(callAccess.front, center);                  // looking at the building from the A side
-  let B = offsetFeet(center, (facing + 270) % 360, ROWHOUSE_FT);      // dwelling to the left
-  let D = offsetFeet(center, (facing + 90) % 360, ROWHOUSE_FT);       // dwelling to the right
-  // C = the back of the building, straight behind the pin (just past the rear wall when the outline is known)
-  let C = offsetFeet(center, facing, 25);
+  const facing = bearing(callAccess.front, center), right = (facing + 90) % 360;
+  const k = Math.cos(center[1] * Math.PI / 180);
+  const ax = [Math.sin(right * Math.PI / 180), Math.cos(right * Math.PI / 180)];
+  const bx = [Math.sin(facing * Math.PI / 180), Math.cos(facing * Math.PI / 180)];
+  const toFt = v => [(v[0] - center[0]) * k * 364000, (v[1] - center[1]) * 364000];
+  const R = v => { const f = toFt(v); return f[0] * ax[0] + f[1] * ax[1]; };          // across (left - / right +)
+  const Bk = v => { const f = toFt(v); return f[0] * bx[0] + f[1] * bx[1]; };         // depth (front - / back +)
+  const at = (r, b) => [center[0] + (r * ax[0] + b * bx[0]) / (k * 364000), center[1] + (r * ax[1] + b * bx[1]) / 364000];
   const g = callAccess.fp;
-  if (g) {
-    const k = Math.cos(center[1] * Math.PI / 180), bx = [Math.sin(facing * Math.PI / 180), Math.cos(facing * Math.PI / 180)];
-    const bmax = Math.max(...(g.type === 'Polygon' ? [g.coordinates] : g.coordinates).flatMap(p => p[0])
-      .map(v => (v[0] - center[0]) * k * 364000 * bx[0] + (v[1] - center[1]) * 364000 * bx[1]));
-    if (isFinite(bmax) && bmax > 0) C = offsetFeet(center, facing, bmax + 10);
-    // Apartment complex: B and D on the building's own left and right walls, C at the middle of its back
-    if (callBldgInfo && /apartment/i.test(callBldgInfo.text || '')) {
-      const right = (facing + 90) % 360, ax = [Math.sin(right * Math.PI / 180), Math.cos(right * Math.PI / 180)];
-      const ringsOf = q => (q.type === 'Polygon' ? [q.coordinates] : q.coordinates).map(p => p[0]);
-      const parts = [g];                                              // add every piece connected to this one (touching within ~3 ft)
-      for (let grew = true; grew;) {
-        grew = false;
-        (g.others || []).forEach(o => {
-          if (parts.includes(o)) return;
-          if (parts.some(p => ringsOf(o).some(r => r.some(v => feetToPolygon(v, p) < 3)) || ringsOf(p).some(r => r.some(v => feetToPolygon(v, o) < 3)))) { parts.push(o); grew = true; }
-        });
-      }
-      const vs = parts.flatMap(q => ringsOf(q).flat()).map(v => [(v[0] - center[0]) * k * 364000, (v[1] - center[1]) * 364000]);
-      const rs = vs.map(v => v[0] * ax[0] + v[1] * ax[1]), bs = vs.map(v => v[0] * bx[0] + v[1] * bx[1]);
-      const rmin = Math.min(...rs), rmax = Math.max(...rs), midB = (Math.min(...bs) + Math.max(...bs)) / 2;
-      const at = (r, b) => [center[0] + (r * ax[0] + b * bx[0]) / (k * 364000), center[1] + (r * ax[1] + b * bx[1]) / 364000];
-      B = at(rmin - 15, midB); D = at(rmax + 15, midB); C = at((rmin + rmax) / 2, Math.max(...bs) + 10);
+  if (!g) {                                                          // no building outline: front / back / sides of the pin
+    const fb = Bk(callAccess.front);
+    return { A: at(0, fb / 2), B: at(-12, 0), D: at(12, 0), C: at(0, -fb / 2), cLabel: 'C', walkTo: null };
+  }
+  const isApt = callBldgInfo && /apartment/i.test(callBldgInfo.text || '');
+  const parts = isApt ? buildingParts(g) : [g];                       // an apartment building drawn in pieces = one building
+  const vs = parts.flatMap(q => (q.type === 'Polygon' ? [q.coordinates] : q.coordinates).flatMap(p => p[0]));
+  let rmin = Math.min(...vs.map(R)), rmax = Math.max(...vs.map(R)), bmin = Math.min(...vs.map(Bk)), bmax = Math.max(...vs.map(Bk));
+  // One outline drawn for several addresses (a row, a strip of stores): the walls are halfway to the addresses next door
+  if (!isApt && callAccess.props && callAccess.props.length) {
+    const num = parseInt(((call.label || '').match(/^\s*(\d+)/) || [])[1], 10), street = streetCore(call.label || '');
+    const pts = callAccess.props.filter(p => street && streetCore(p.addr) === street)
+      .map(p => ({ n: parseInt((p.addr.match(/^\s*(\d+)/) || [])[1], 10), r: R(p.c), b: Bk(p.c) }))
+      .filter(p => p.n && (!num || p.n % 2 === num % 2) && p.r >= rmin - 1 && p.r <= rmax + 1 && p.b >= bmin - 30 && p.b <= bmax + 30);
+    const own = (num && pts.find(p => p.n === num)) || pts.slice().sort((x, y) => Math.abs(x.r) - Math.abs(y.r))[0];
+    if (own) {
+      const left = pts.filter(p => p.r < own.r - 3).sort((x, y) => y.r - x.r)[0];
+      const rgt = pts.filter(p => p.r > own.r + 3).sort((x, y) => x.r - y.r)[0];
+      if (left) rmin = (own.r + left.r) / 2;
+      if (rgt) rmax = (own.r + rgt.r) / 2;
+      const lotBack = bmin + 2 * (own.b - bmin);                      // the address point sits mid-lot: the lot ends about twice as deep
+      if (own.b > bmin + 5 && lotBack < bmax) bmax = lotBack;
     }
   }
+  const midR = (rmin + rmax) / 2, midB = (bmin + bmax) / 2, e = 6;      // e: just outside the wall so the dot sits against it
+  const A = at(midR, bmin - e), C = at(midR, bmax + e), B = at(rmin - e, midB), D = at(rmax + e, midB);
   return { A, B, C, D, cLabel: 'C', walkTo: C };
 }
 
