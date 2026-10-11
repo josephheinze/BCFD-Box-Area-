@@ -551,18 +551,18 @@ function addOverlays() {
   map.addSource('vacant', { type: 'geojson', data: areaVacant });
   map.addSource('xray', { type: 'geojson', data: areaXray });
   map.addLayer({ id: 'vacant', type: 'circle', source: 'vacant', minzoom: 15.5,
-    paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 15.5, 5, 18, 10], 'circle-color': '#16a34a',
+    paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 15.5, 3.5, 18, 7], 'circle-color': '#16a34a',
              'circle-stroke-color': '#fff', 'circle-stroke-width': 1.5 } });
   map.addLayer({ id: 'vacant-v', type: 'symbol', source: 'vacant', minzoom: 16,
-    layout: { 'text-field': 'V', 'text-size': ['interpolate', ['linear'], ['zoom'], 16, 9, 18, 12],
+    layout: { 'text-field': 'V', 'text-size': ['interpolate', ['linear'], ['zoom'], 16, 7, 18, 9],
               'text-font': ['DIN Pro Bold', 'Arial Unicode MS Bold'], 'text-allow-overlap': true, 'text-ignore-placement': true },
     paint: { 'text-color': '#fff' } });
   map.addLayer({ id: 'xray', type: 'circle', source: 'xray', minzoom: 14,
-    paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 14, 5, 18, 10],
+    paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 14, 3.5, 18, 7],
              'circle-color': ['case', ['any', ['==', ['upcase', ['to-string', ['get', 'szType']]], 'DNG'], ['in', 'UNSAFE', ['upcase', ['to-string', ['get', 'szType']]]], ['in', 'DANGER', ['upcase', ['to-string', ['get', 'szType']]]]], '#9333ea', '#e11d48'],   // purple = unsafe / dangerous condition
              'circle-stroke-color': '#fff', 'circle-stroke-width': 1.5 } });
   map.addLayer({ id: 'xray-x', type: 'symbol', source: 'xray', minzoom: 15,
-    layout: { 'text-field': ['case', ['any', ['==', ['upcase', ['to-string', ['get', 'szType']]], 'DNG'], ['in', 'UNSAFE', ['upcase', ['to-string', ['get', 'szType']]]], ['in', 'DANGER', ['upcase', ['to-string', ['get', 'szType']]]]], 'D', 'X'], 'text-size': 11, 'text-font': ['DIN Pro Bold', 'Arial Unicode MS Bold'], 'text-allow-overlap': true, 'text-ignore-placement': true },
+    layout: { 'text-field': ['case', ['any', ['==', ['upcase', ['to-string', ['get', 'szType']]], 'DNG'], ['in', 'UNSAFE', ['upcase', ['to-string', ['get', 'szType']]]], ['in', 'DANGER', ['upcase', ['to-string', ['get', 'szType']]]]], 'D', 'X'], 'text-size': ['interpolate', ['linear'], ['zoom'], 15, 7, 18, 9], 'text-font': ['DIN Pro Bold', 'Arial Unicode MS Bold'], 'text-allow-overlap': true, 'text-ignore-placement': true },
     paint: { 'text-color': '#fff' } });
   map.on('click', 'xray', e => new mapboxgl.Popup({ offset: 8 }).setLngLat(e.lngLat).setHTML(xrayHTML(e.features[0].properties)).addTo(map));
   map.on('click', 'vacant', e => new mapboxgl.Popup({ offset: 8 }).setLngLat(e.lngLat).setHTML(vacantHTML(e.features[0].properties)).addTo(map));
@@ -755,8 +755,8 @@ function showHazards() {
     const c0 = f.geometry.coordinates;
     let c = c0;
     for (const deg of [90, 270, 0, 180]) {                             // one step to a side, never a chain
-      if (!placed.some(q => feetBetween(q, c) < 12)) break;
-      c = offsetFeet(c0, deg, 14);
+      if (!placed.some(q => feetBetween(q, c) < 9)) break;
+      c = offsetFeet(c0, deg, 10);
     }
     placed.push(c);
     return c === c0 ? f : Object.assign({}, f, { geometry: { type: 'Point', coordinates: c } });
@@ -769,8 +769,7 @@ async function loadAreaHazards() {
   if (!window.map) return;
   const z = map.getZoom(), b = map.getBounds(), box = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()];
   if (z >= 14) pointsInBox(XRAY_SVC, 0, ...box).then(async f => {
-    areaXray = toFC(f); showHazards();                                  // show right away...
-    if (z >= 15.5) { areaXray = toFC(await onRoofs(f)); showHazards(); }   // ...then move onto the roofs
+    areaXray = toFC(z >= 15.5 ? await onRoofs(f) : f); showHazards();   // placed on the roofs before showing (no jumping)
   }).catch(e => console.error(e));
   if (z >= 15.5) pointsInBox(VACANT_SVC, 1, ...box).then(f => { areaVacant = toFC(f); showHazards(); }).catch(e => console.error(e));
 }
