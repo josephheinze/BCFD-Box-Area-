@@ -940,6 +940,27 @@ async function reverseLabel(pt) {
   } catch (e) { return null; }
 }
 
+// A tapped building gets the address the state has on record for it (e.g. the Gateway is 3001 W North Ave,
+// not a made-up 3013). If there's no record, use the map's address like before.
+async function tapLabel(pt) {
+  const p = [pt.lng, pt.lat];
+  try {
+    const fp = await callFootprint(p);
+    const at = fp && !pointInGeo(p, fp) ? (nearestOnPolygon(p, fp) || p) : p;
+    for (const src of MD_PROPERTY_SOURCES) {
+      try {
+        const d = await cityQuery(0, { geometry: `${at[0]},${at[1]}`, geometryType: 'esriGeometryPoint', inSR: '4326',
+          spatialRel: 'esriSpatialRelIntersects', distance: '35', units: 'esriSRUnit_Meter', where: '1=1', outFields: 'ADDRESS', returnGeometry: 'true' }, src);
+        const r = (d.features || []).filter(f => f.geometry && f.attributes && clean(f.attributes.ADDRESS))
+          .sort((a, b) => feetBetween(at, [a.geometry.x, a.geometry.y]) - feetBetween(at, [b.geometry.x, b.geometry.y]))[0];
+        if (r) return clean(r.attributes.ADDRESS).toLowerCase().replace(/\b([a-z])/g, c => c.toUpperCase());
+        break;                                                        // server answered, no record: use the map's address
+      } catch (e) { /* try the other copy */ }
+    }
+  } catch (e) { /* use the map's address */ }
+  return reverseLabel(pt);
+}
+
 // ============================================================
 // A CALL IS SET: box, route, hydrants
 // ============================================================
@@ -959,12 +980,13 @@ async function setCall(pt) {
   renderSheet();
   fitAll();
 
-  if (!pt.label) reverseLabel(pt).then(l => { if (seq === callSeq && l) { call.label = l; renderSheet(); } });
+  const labelReady = pt.label ? Promise.resolve() :
+    tapLabel(pt).then(l => { if (seq === callSeq && l) { call.label = l; renderSheet(); } }).catch(() => {});
   runRoute();
   loadNearHydrants(seq);
   loadNearHazards(seq);
   loadBuildingAndAccess(seq);
-  loadBuildingInfo(seq);
+  labelReady.then(() => { if (seq === callSeq) loadBuildingInfo(seq); });   // building record uses the address
 }
 
 function clearCall() {
@@ -1221,13 +1243,14 @@ async function nearbyProperties(pt) {
 }
 
 async function callFootprint(pt) {
-  const d = 0.0009, dLat = d * 0.77;
+  const d = 0.0015, dLat = d * 0.77;
   const res = await cityQuery(BUILDINGS_LAYER, { geometry: [pt[0] - d, pt[1] - dLat, pt[0] + d, pt[1] + dLat].join(','),
     geometryType: 'esriGeometryEnvelope', inSR: '4326', spatialRel: 'esriSpatialRelIntersects', outFields: 'OBJECTID',
     returnGeometry: 'true', geometryPrecision: '7' });
   const all = (res.features || []).filter(f => f.geometry && f.geometry.rings && f.geometry.rings.length)
     .map(f => { const g = esriToGeo(f.geometry.rings); return { g, ft: feetToPolygon(pt, g) }; });
   const c = all.sort((a, b) => a.ft - b.ft)[0];
+  if (c) c.g.others = all.map(x => x.g);                              // nearby outlines (apartment buildings drawn in pieces)
   return c && c.ft <= 60 ? c.g : null;
 }
 
@@ -1262,7 +1285,16 @@ function computeSides() {
     // Apartment complex: B and D on the building's own left and right walls, C at the middle of its back
     if (callBldgInfo && /apartment/i.test(callBldgInfo.text || '')) {
       const right = (facing + 90) % 360, ax = [Math.sin(right * Math.PI / 180), Math.cos(right * Math.PI / 180)];
-      const vs = (g.type === 'Polygon' ? [g.coordinates] : g.coordinates).flatMap(p => p[0]).map(v => [(v[0] - center[0]) * k * 364000, (v[1] - center[1]) * 364000]);
+      const ringsOf = q => (q.type === 'Polygon' ? [q.coordinates] : q.coordinates).map(p => p[0]);
+      const parts = [g];                                              // add every piece connected to this one (touching within ~3 ft)
+      for (let grew = true; grew;) {
+        grew = false;
+        (g.others || []).forEach(o => {
+          if (parts.includes(o)) return;
+          if (parts.some(p => ringsOf(o).some(r => r.some(v => feetToPolygon(v, p) < 3)) || ringsOf(p).some(r => r.some(v => feetToPolygon(v, o) < 3)))) { parts.push(o); grew = true; }
+        });
+      }
+      const vs = parts.flatMap(q => ringsOf(q).flat()).map(v => [(v[0] - center[0]) * k * 364000, (v[1] - center[1]) * 364000]);
       const rs = vs.map(v => v[0] * ax[0] + v[1] * ax[1]), bs = vs.map(v => v[0] * bx[0] + v[1] * bx[1]);
       const rmin = Math.min(...rs), rmax = Math.max(...rs), midB = (Math.min(...bs) + Math.max(...bs)) / 2;
       const at = (r, b) => [center[0] + (r * ax[0] + b * bx[0]) / (k * 364000), center[1] + (r * ax[1] + b * bx[1]) / 364000];
