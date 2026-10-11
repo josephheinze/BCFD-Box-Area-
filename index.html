@@ -941,8 +941,8 @@ async function reverseLabel(pt) {
 }
 
 // A state record point belongs to this building unless it sits on a different building
-function recordIsOurs(q, fp) {
-  if (!fp) return true;
+function buildingParts(fp) {
+  if (!fp) return [];
   const ringsOf = g => (g.type === 'Polygon' ? [g.coordinates] : g.coordinates).map(p => p[0]);
   const parts = [fp];                                                   // this building, including pieces drawn separately
   for (let grew = true; grew;) {
@@ -952,30 +952,43 @@ function recordIsOurs(q, fp) {
       if (parts.some(p => ringsOf(o).some(r => r.some(v => feetToPolygon(v, p) < 3)) || ringsOf(p).some(r => r.some(v => feetToPolygon(v, o) < 3)))) { parts.push(o); grew = true; }
     });
   }
+  return parts;
+}
+function recordIsOurs(q, fp) {
+  if (!fp) return true;
+  const parts = buildingParts(fp);
   if (parts.some(p => feetToPolygon(q, p) < 10)) return true;
   return !(fp.others || []).some(o => !parts.includes(o) && feetToPolygon(q, o) < 5);
 }
 
-// A tapped building gets the address the state has on record for it (e.g. the Gateway is 3001 W North Ave,
-// not a made-up 3013). If there's no record, use the map's address like before.
+// A tapped building gets the real address the state has on record for it.
+// The map gives a street and an estimated number (e.g. "3038 West North Avenue", not a real address).
+// Pick the state record on that same street, same side (odd / even), with the closest number,
+// never one that sits on a different building. No match: keep the map's address.
 async function tapLabel(pt) {
+  const mapLabel = await reverseLabel(pt);
+  const num = parseInt(((mapLabel || '').match(/^\s*(\d+)/) || [])[1], 10), street = streetCore(mapLabel || '');
+  if (!num || !street) return mapLabel;
   const p = [pt.lng, pt.lat];
   try {
     const fp = await callFootprint(p);
-    const at = fp && !pointInGeo(p, fp) ? (nearestOnPolygon(p, fp) || p) : p;
     for (const src of MD_PROPERTY_SOURCES) {
       try {
-        const d = await cityQuery(0, { geometry: `${at[0]},${at[1]}`, geometryType: 'esriGeometryPoint', inSR: '4326',
-          spatialRel: 'esriSpatialRelIntersects', distance: '35', units: 'esriSRUnit_Meter', where: '1=1', outFields: 'ADDRESS', returnGeometry: 'true' }, src);
-        const r = (d.features || []).filter(f => f.geometry && f.attributes && clean(f.attributes.ADDRESS)
-            && fp && recordIsOurs([f.geometry.x, f.geometry.y], fp))          // never a record that sits on a different building
-          .sort((a, b) => feetBetween(at, [a.geometry.x, a.geometry.y]) - feetBetween(at, [b.geometry.x, b.geometry.y]))[0];
-        if (r) return clean(r.attributes.ADDRESS).toLowerCase().replace(/\b([a-z])/g, c => c.toUpperCase());
-        break;                                                        // server answered, no record: use the map's address
+        const d = await cityQuery(0, { geometry: `${p[0]},${p[1]}`, geometryType: 'esriGeometryPoint', inSR: '4326',
+          spatialRel: 'esriSpatialRelIntersects', distance: '150', units: 'esriSRUnit_Meter', where: '1=1', outFields: 'ADDRESS', returnGeometry: 'true' }, src);
+        const recs = (d.features || []).map(f => {
+          const addr = clean(f.attributes && f.attributes.ADDRESS), n = parseInt((addr.match(/^\s*(\d+)/) || [])[1], 10);
+          return { addr, n, q: f.geometry ? [f.geometry.x, f.geometry.y] : null };
+        }).filter(r => r.q && r.n && streetCore(r.addr) === street && r.n % 2 === num % 2 && recordIsOurs(r.q, fp));
+        if (!recs.length) return mapLabel;
+        const parts = buildingParts(fp);
+        const onBldg = r => parts.some(g => feetToPolygon(r.q, g) < 10) ? 0 : 1;   // a record on this building (any piece) comes first
+        recs.sort((a, b) => onBldg(a) - onBldg(b) || Math.abs(a.n - num) - Math.abs(b.n - num) || feetBetween(p, a.q) - feetBetween(p, b.q));
+        return recs[0].addr.toLowerCase().replace(/\b([a-z])/g, c => c.toUpperCase());
       } catch (e) { /* try the other copy */ }
     }
-  } catch (e) { /* use the map's address */ }
-  return reverseLabel(pt);
+  } catch (e) { /* keep the map's address */ }
+  return mapLabel;
 }
 
 // ============================================================
@@ -1368,7 +1381,9 @@ async function loadBuildingInfo(seq) {
       }
       if (!recs.length) {
         const d = await cityQuery(0, Object.assign({}, near, { distance: '35', where: '1=1' }), src);
-        recs = (d.features || []).filter(f => f.geometry && recordIsOurs([f.geometry.x, f.geometry.y], fpG))   // never a record on a different building
+        const onStreet = streetCore(call.label || '');
+        recs = (d.features || []).filter(f => f.geometry && recordIsOurs([f.geometry.x, f.geometry.y], fpG)   // never a record on a different building
+            && (!onStreet || !f.attributes || streetCore(f.attributes.ADDRESS) === onStreet))               // and only on the call's street
           .sort((a, b) => feetBetween(inPt, [a.geometry.x, a.geometry.y]) - feetBetween(inPt, [b.geometry.x, b.geometry.y]));
       }
       if (seq !== callSeq) return;
