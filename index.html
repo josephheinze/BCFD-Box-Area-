@@ -1159,7 +1159,6 @@ async function loadBuildingAndAccess(seq) {
                         street: front ? front.p.name : null, front: front ? front.c : null, pt: pick.a.c, walks: null };
     // The building's own outline, so B / C / D sit on its real sides (big buildings) or the neighbors (rowhouses)
     try { callAccess.fp = await callFootprint(center); } catch (e) { callAccess.fp = null; }
-    callAccess.props = await nearbyProperties(center);
     if (seq !== callSeq) return;
     drawFrontBack();
     renderSheet();
@@ -1246,58 +1245,22 @@ function insidePoint(g, pt) {
 
 // Where A, B, C, D go (and where the walking line should end), seen standing on the A side
 function computeSides() {
+  // This morning's settings: A at the front, B / D one house over on each side of the pin (ROWHOUSE_FT)
   const center = [call.lng, call.lat];
   const A = callAccess.frontWalk || stepToward(callAccess.front, center, 30);
-  const facing = bearing(callAccess.front, center), right = (facing + 90) % 360;
-  const alleyRear = callAccess.pt && callAccess.where === 'rear';
-  // Default (no outline): neighbors ~one rowhouse over, C at the alley or just behind the pin
-  let B = offsetFeet(center, (facing + 270) % 360, ROWHOUSE_FT), D = offsetFeet(center, right, ROWHOUSE_FT);
-  let C = offsetFeet(center, facing, 25), cLabel = 'C';                // C = the back of the building
-  let walkTo = callAccess.pt || null;
+  const facing = bearing(callAccess.front, center);                  // looking at the building from the A side
+  const B = offsetFeet(center, (facing + 270) % 360, ROWHOUSE_FT);    // dwelling to the left
+  const D = offsetFeet(center, (facing + 90) % 360, ROWHOUSE_FT);     // dwelling to the right
+  // C = the back of the building, straight behind the pin (just past the rear wall when the outline is known)
+  let C = offsetFeet(center, facing, 25);
   const g = callAccess.fp;
   if (g) {
-    // measure the outline in feet: across (left/right) and deep (front/back)
-    const k = Math.cos(center[1] * Math.PI / 180);
-    const ax = [Math.sin(right * Math.PI / 180), Math.cos(right * Math.PI / 180)];
-    const bx = [Math.sin(facing * Math.PI / 180), Math.cos(facing * Math.PI / 180)];
-    const toFt = v => [(v[0] - center[0]) * k * 364000, (v[1] - center[1]) * 364000];
-    const vs = (g.type === 'Polygon' ? [g.coordinates] : g.coordinates).flatMap(p => p[0]).map(toFt);
-    const rs = vs.map(v => v[0] * ax[0] + v[1] * ax[1]), bs = vs.map(v => v[0] * bx[0] + v[1] * bx[1]);
-    let rmin = Math.min(...rs), rmax = Math.max(...rs), bmin = Math.min(...bs), bmax = Math.max(...bs);
-    const at = (r, b) => [center[0] + (r * ax[0] + b * bx[0]) / (k * 364000), center[1] + (r * ax[1] + b * bx[1]) / 364000];
-    const midB = (bmin + bmax) / 2;
-    const isRow = callBldgInfo && /rowhouse|residential/i.test(callBldgInfo.text || '');   // "Residential (row or detached...)" counts too
-    const wholeRow = isRow && (rmax - rmin) > 45;                     // one outline drawn for the whole row
-    if (!wholeRow) {
-      const off = Math.min((rmax - rmin) / 2, 15);                   // the middle of the house next door on a row
-      B = at(rmin - off, midB);
-      D = at(rmax + off, midB);
-    } else {
-      B = at(-ROWHOUSE_FT, midB);                                    // one outline for the whole row: the houses on either side
-      D = at(ROWHOUSE_FT, midB);
-    }
-    // The addresses next door (state property points, this side of the street). If the next address sits inside
-    // this same outline, the city drew attached buildings as one shape: put B / D on that next address instead.
-    let cAcross = wholeRow ? 0 : (rmin + rmax) / 2;
-    if (callAccess.props && callAccess.props.length && !/apartment/i.test((callBldgInfo && callBldgInfo.text) || '')) {
-      const num = ((call.label || '').match(/^\s*(\d+)/) || [])[1];
-      const f = toFt(callAccess.front), frontB = f[0] * bx[0] + f[1] * bx[1];
-      const pts = callAccess.props.map(p => { const v = toFt(p.c); return { addr: p.addr, r: v[0] * ax[0] + v[1] * ax[1], b: v[0] * bx[0] + v[1] * bx[1] }; })
-        .filter(p => p.b > frontB + 5 && p.b < bmax + 30);              // this side of the street only
-      const own = (num && pts.find(p => p.addr.startsWith(num + ' '))) || pts.slice().sort((x, y) => Math.hypot(x.r, x.b) - Math.hypot(y.r, y.b))[0];
-      if (own) {
-        const left = pts.filter(p => p.r < own.r - 4).sort((x, y) => y.r - x.r)[0];
-        const right = pts.filter(p => p.r > own.r + 4).sort((x, y) => x.r - y.r)[0];
-        let used = false;
-        if (left && left.r > rmin) { B = at(left.r, midB); used = true; }
-        if (right && right.r < rmax) { D = at(right.r, midB); used = true; }
-        if (used) cAcross = own.r;
-      }
-    }
-    // C = the back of the building: straight back from A, just past the rear wall
-    C = at(cAcross, bmax + 10); cLabel = 'C'; walkTo = C;
+    const k = Math.cos(center[1] * Math.PI / 180), bx = [Math.sin(facing * Math.PI / 180), Math.cos(facing * Math.PI / 180)];
+    const bmax = Math.max(...(g.type === 'Polygon' ? [g.coordinates] : g.coordinates).flatMap(p => p[0])
+      .map(v => (v[0] - center[0]) * k * 364000 * bx[0] + (v[1] - center[1]) * 364000 * bx[1]));
+    if (isFinite(bmax) && bmax > 0) C = offsetFeet(center, facing, bmax + 10);
   }
-  return { A, B, C, D, cLabel, walkTo };
+  return { A, B, C, D, cLabel: 'C', walkTo: C };
 }
 
 // The yellow A-to-C walking line and walk distance are turned off everywhere
