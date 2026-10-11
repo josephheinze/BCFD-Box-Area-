@@ -148,7 +148,6 @@
   <div id="suggest"></div>
   <div class="row">
     <select id="origin" aria-label="Responding from"></select>
-    <button id="colorBtn">Colors: mine</button>
     <button id="styleBtn">Dark map</button>
   </div>
 </div>
@@ -214,7 +213,6 @@ const DEFAULT_HOUSE = { id: 'E-20', name: 'E-20 T-18 M-8', address: '3130 W. Nor
 // Fire Dept hazard buildings (CODE-X / X-RAY / UNSAFE) from the 911-CAD system, and DHCD open vacant building notices
 const XRAY_SVC = 'https://baltegis.baltimorecity.gov/mapping/rest/services/911/Fire_CODEX_XRAY_UNSAFE_Building_ALT/MapServer';
 const VACANT_SVC = 'https://egisdata.baltimorecity.gov/egis/rest/services/Housing/DHCD_Open_Baltimore_Datasets/FeatureServer';
-const LAYER_BUILDINGS = 20;                // building footprints with height and stories
 const HOSE_LENGTH_FT = 50;                 // used for the "about N lengths" hydrant estimate
 // Backup copy of the same hydrant data, published by the city as a separate service
 const HYDRANT_BACKUP = 'https://gisdata.baltimorecity.gov/egis/rest/services/CAD911/Hydrants_City/FeatureServer';
@@ -395,10 +393,9 @@ let areaHydrants = { type: 'FeatureCollection', features: [] };
 let callMarker = null, hydMarkers = [];
 let gpsOrigin = null;
 let nearXray = null, nearVacant = null;
-let callBldg = null, callAccess = null;
+let callAccess = null;
 let styleName = 'sat';   // satellite by default
-let colorMode = store('colorMode') || 'mine';   // 'mine' | 'house' | 'plain'
-const COLOR_LABELS = { mine: 'Colors: mine', house: 'Colors: houses', plain: 'Colors: plain' };
+const colorMode = 'plain';   // box areas: plain lines, no color shading
 
 // ============================================================
 // MAP
@@ -416,13 +413,7 @@ function start() {
   setupOrigin();
   setupSearch();
   $('grab').onclick = () => $('sheet').classList.toggle('collapsed');
-  $('colorBtn').textContent = COLOR_LABELS[colorMode] || COLOR_LABELS.mine;
-  $('colorBtn').onclick = () => {
-    colorMode = { mine: 'house', house: 'plain', plain: 'mine' }[colorMode] || 'mine';
-    store('colorMode', colorMode);
-    $('colorBtn').textContent = COLOR_LABELS[colorMode];
-    refreshBoxFilters();
-  };
+
   $('styleBtn').onclick = () => {
     if (!window.map) return;
     styleName = styleName === 'dark' ? 'sat' : 'dark';
@@ -490,7 +481,7 @@ function addOverlays() {
   map.addLayer({ id: 'boxes-mine', type: 'fill', source: 'boxes', filter: st.fillFilter,
     paint: { 'fill-color': st.fill, 'fill-opacity': st.fillOpacity } }, firstSymbol);
   map.addLayer({ id: 'boxes-call', type: 'fill', source: 'boxes', filter: ['==', ['get', 'box'], callBox ? callBox.box : '__none'],
-    paint: { 'fill-color': '#ef4444', 'fill-opacity': 0.22 } }, firstSymbol);
+    paint: { 'fill-color': '#ef4444', 'fill-opacity': 0 } }, firstSymbol);
   map.addLayer({ id: 'boxes-line', type: 'line', source: 'boxes',
     paint: { 'line-color': st.line, 'line-width': st.lineWidth,
              'line-opacity': 0.85, 'line-dasharray': [2, 1.5] } }, firstSymbol);
@@ -512,18 +503,10 @@ function addOverlays() {
               'text-font': ['DIN Pro Bold', 'Arial Unicode MS Bold'] },
     paint: { 'text-color': '#fff', 'text-halo-color': '#000', 'text-halo-width': 1.6 } });
 
-  // Alleys from the base map's road data (OpenStreetMap via Mapbox), drawn bright so rear access stands out
-  if (map.getSource('composite')) {
-    try {
-      map.addLayer({ id: 'alleys', type: 'line', source: 'composite', 'source-layer': 'road', minzoom: 14,
-        filter: ['all', ['==', ['get', 'class'], 'service'], ['==', ['get', 'type'], 'service:alley']],
-        layout: { 'line-cap': 'round', 'line-join': 'round' },
-        paint: { 'line-color': '#e879f9', 'line-width': ['interpolate', ['linear'], ['zoom'], 14, 1, 18, 5], 'line-opacity': 0.9 } }, firstSymbol);
-    } catch (e) { console.error(e); }
-  }
-  map.addSource('callbldg', { type: 'geojson', data: callBldg ? callBldg.feature : { type: 'FeatureCollection', features: [] } });
-  map.addLayer({ id: 'callbldg-fill', type: 'fill', source: 'callbldg', paint: { 'fill-color': '#fde047', 'fill-opacity': 0.25 } });
-  map.addLayer({ id: 'callbldg-line', type: 'line', source: 'callbldg', paint: { 'line-color': '#fde047', 'line-width': 3 } });
+  // Only the alley that belongs to the call location is drawn (filled in after a search)
+  map.addSource('callalley', { type: 'geojson', data: callAccess && callAccess.line ? callAccess.line : { type: 'FeatureCollection', features: [] } });
+  map.addLayer({ id: 'callalley', type: 'line', source: 'callalley', layout: { 'line-cap': 'round', 'line-join': 'round' },
+    paint: { 'line-color': '#e879f9', 'line-width': ['interpolate', ['linear'], ['zoom'], 14, 2, 18, 6], 'line-opacity': 0.95 } }, firstSymbol);
 
   map.addSource('vacant', { type: 'geojson', data: areaVacant });
   map.addSource('xray', { type: 'geojson', data: areaXray });
@@ -843,8 +826,8 @@ let callSeq = 0;
 async function setCall(pt) {
   const seq = ++callSeq;
   call = pt; callBox = findBox(pt); routeGeo = null; nearHydrants = null; window._route = null;
-  nearXray = null; nearVacant = null; callBldg = null; callAccess = null;
-  setData('callbldg', { type: 'FeatureCollection', features: [] });
+  nearXray = null; nearVacant = null; callAccess = null;
+  setData('callalley', { type: 'FeatureCollection', features: [] });
   if (callMarker) callMarker.remove();
   const el = document.createElement('div'); el.className = 'call-pin';
   callMarker = new mapboxgl.Marker({ element: el, anchor: 'bottom' }).setLngLat([pt.lng, pt.lat]).addTo(map);
@@ -853,6 +836,7 @@ async function setCall(pt) {
   refreshBoxFilters();
   $('sheet').classList.remove('collapsed');
   renderSheet();
+  fitAll();
 
   if (!pt.label) reverseLabel(pt).then(l => { if (seq === callSeq && l) { call.label = l; renderSheet(); } });
   runRoute();
@@ -863,7 +847,7 @@ async function setCall(pt) {
 
 function clearCall() {
   callSeq++; call = null; callBox = null; routeGeo = null; nearHydrants = []; window._route = null;
-  callBldg = null; callAccess = null; setData('callbldg', { type: 'FeatureCollection', features: [] });
+  callAccess = null; setData('callalley', { type: 'FeatureCollection', features: [] });
   if (callMarker) callMarker.remove(); callMarker = null;
   hydMarkers.forEach(m => m.remove()); hydMarkers = [];
   setData('route', { type: 'FeatureCollection', features: [] });
@@ -885,7 +869,6 @@ async function runRoute() {
     window._route = rt;
     routeGeo = { type: 'Feature', properties: {}, geometry: rt.geometry };
     setData('route', routeGeo);
-    fitAll();
   } catch (e) {
     if (seq !== callSeq) return;
     window._route = { error: e.message };
@@ -919,35 +902,11 @@ async function loadNearHydrants(seq) {
   renderSheet(); fitAll();
 }
 
-// Building at the address (height, stories, outline) and where the nearest alley is
+// Where the nearest alley is (rear or side) relative to the address
 async function loadBuildingAndAccess(seq) {
   const pt = [call.lng, call.lat];
-  let center = pt;
-  // 1) Building footprint: the one under the pin, or the closest within about 80 ft
-  try {
-    const d = 0.0003, dLat = d * 0.77;
-    const res = await cityQuery(LAYER_BUILDINGS, { geometry: [pt[0] - d, pt[1] - dLat, pt[0] + d, pt[1] + dLat].join(','),
-      geometryType: 'esriGeometryEnvelope', inSR: '4326', spatialRel: 'esriSpatialRelIntersects',
-      outFields: 'BLDGHEIGHT,NUMSTORIES,FEATURECOD', returnGeometry: 'true', geometryPrecision: '7' });
-    if (seq !== callSeq) return;
-    const cands = (res.features || []).filter(f => f.geometry && f.geometry.rings && f.geometry.rings.length)
-      .map(f => { const g = esriToGeo(f.geometry.rings); return { a: f.attributes || {}, g, ft: feetToPolygon(pt, g) }; })
-      .sort((x, y) => x.ft - y.ft);
-    const b = cands[0];
-    if (b && b.ft <= 80) {
-      center = labelPoint(b.g);
-      const h = Number(b.a.BLDGHEIGHT), st = Number(b.a.NUMSTORIES);
-      callBldg = { height: h > 0 ? Math.round(h) : null, stories: st > 0 ? st : null, ft: b.ft,
-                   feature: { type: 'Feature', properties: {}, geometry: b.g } };
-      setData('callbldg', callBldg.feature);
-    } else callBldg = { none: true };
-  } catch (e) {
-    if (seq !== callSeq) return;
-    callBldg = { error: e.message || String(e) };
-  }
-  renderSheet();
-
-  // 2) Alleys and the front street near the building (Mapbox road data)
+  const center = pt;
+  // Alleys and the front street near the address (Mapbox road data)
   try {
     const url = `https://api.mapbox.com/v4/mapbox.mapbox-streets-v8/tilequery/${center[0]},${center[1]}.json` +
       `?radius=70&limit=50&layers=road&geometry=linestring&dedupe=true&access_token=${MAPBOX_TOKEN}`;
@@ -968,13 +927,42 @@ async function loadBuildingAndAccess(seq) {
         const gap = angleGap(ab, bearing(center, street.c));
         where = gap >= 120 ? 'rear' : gap >= 50 ? 'side' : 'front side';
       }
-      callAccess = { ft: alley.ft, dir: compass(ab), where, name: alley.p.name || '', street: street ? street.p.name : null };
+      callAccess = { ft: alley.ft, dir: compass(ab), where, name: alley.p.name || '', street: street ? street.p.name : null, pt: alley.c };
+      drawCallAlley(seq);
     }
   } catch (e) {
     if (seq !== callSeq) return;
     callAccess = { error: e.message || String(e) };
   }
   renderSheet();
+}
+
+// Find the alley line under the closest-alley point in the map's loaded street data and draw only that one
+function drawCallAlley(seq, tries = 0) {
+  if (seq !== callSeq || !callAccess || !callAccess.pt || !window.map) return;
+  let feats = [];
+  try { feats = map.querySourceFeatures('composite', { sourceLayer: 'road' }) || []; } catch (e) { feats = []; }
+  const alleys = feats.filter(f => f.properties && f.properties.class === 'service' && f.properties.type === 'service:alley');
+  const lines = f => f.geometry.type === 'LineString' ? [f.geometry.coordinates] : f.geometry.type === 'MultiLineString' ? f.geometry.coordinates : [];
+  const pt = callAccess.pt, k = Math.cos(pt[1] * Math.PI / 180);
+  const dist = f => Math.min(...lines(f).map(l => {
+    let best = Infinity;
+    for (let i = 0; i < l.length - 1; i++) {
+      const ax = (l[i][0] - pt[0]) * k, ay = l[i][1] - pt[1], bx = (l[i + 1][0] - pt[0]) * k, by = l[i + 1][1] - pt[1];
+      const dx = bx - ax, dy = by - ay, L = dx * dx + dy * dy, t = L ? Math.max(0, Math.min(1, -(ax * dx + ay * dy) / L)) : 0;
+      best = Math.min(best, Math.hypot(ax + t * dx, ay + t * dy));
+    }
+    return best * 364000;   // feet
+  }), Infinity);
+  const near = alleys.map(f => ({ f, ft: dist(f) })).filter(x => x.ft < 10).sort((a, b) => a.ft - b.ft);
+  if (!near.length) {
+    if (tries < 6) setTimeout(() => drawCallAlley(seq, tries + 1), 700);   // street tiles may still be loading
+    return;
+  }
+  const id = near[0].f.id;
+  const pick = near.filter(x => id == null ? x === near[0] : x.f.id === id);
+  callAccess.line = { type: 'FeatureCollection', features: pick.map(x => ({ type: 'Feature', properties: {}, geometry: x.f.geometry })) };
+  setData('callalley', callAccess.line);
 }
 
 async function loadNearHazards(seq) {
@@ -993,16 +981,14 @@ async function loadNearHazards(seq) {
 
 function fitAll() {
   if (!call) return;
+  // Close-up on the address, keeping the nearest hydrants (within about 400 ft) in view
   const b = new mapboxgl.LngLatBounds([call.lng, call.lat], [call.lng, call.lat]);
-  if (routeGeo) routeGeo.geometry.coordinates.forEach(c => b.extend(c));
-  (Array.isArray(nearHydrants) ? nearHydrants : []).forEach(h => b.extend([h.lng, h.lat]));
-  if (callBldg && callBldg.feature) (callBldg.feature.geometry.type === 'Polygon' ? [callBldg.feature.geometry.coordinates] : callBldg.feature.geometry.coordinates)
-    .forEach(p => p[0].forEach(c => b.extend(c)));
+  (Array.isArray(nearHydrants) ? nearHydrants : []).filter(h => h.ft <= 400).slice(0, 3).forEach(h => b.extend([h.lng, h.lat]));
   const top = $('topbar').offsetHeight + 20;
   const wide = window.innerWidth >= 820;
   const bottom = wide ? 40 : Math.min($('sheet').offsetHeight, window.innerHeight * 0.5) + 20;
   const left = wide ? 420 : 40;
-  map.fitBounds(b, { padding: { top, bottom, left, right: 40 }, maxZoom: 17.5, duration: 700 });
+  map.fitBounds(b, { padding: { top, bottom, left, right: 40 }, maxZoom: 18.5, duration: 700 });
 }
 
 // ============================================================
@@ -1086,22 +1072,12 @@ function renderSheet() {
     }).join('') : '<div class="hint">No hydrants found within about 3,000 ft.</div>';
   }
 
-  let bldgTxt = '<span class="loading">checking…</span>', bldgSub = '';
-  if (callBldg && callBldg.error) bldgTxt = '<span style="color:#fca5a5;font-size:13px">Couldn\'t load</span>';
-  else if (callBldg && callBldg.none) bldgTxt = '<span style="font-size:14px">No building found at this spot</span>';
-  else if (callBldg) {
-    const parts = [];
-    if (callBldg.stories) parts.push(`${callBldg.stories} stor${callBldg.stories > 1 ? 'ies' : 'y'}`);
-    if (callBldg.height) parts.push(`~${callBldg.height} ft tall`);
-    bldgTxt = parts.length ? parts.join(' · ') : '<span style="font-size:14px">Size not recorded</span>';
-    bldgSub = `<small class="statsub">Outlined in yellow${callBldg.ft > 0 ? ' (closest to the pin)' : ''}</small>`;
-  }
   let accessTxt = '<span class="loading">checking…</span>', accessSub = '';
   if (callAccess && callAccess.error) accessTxt = '<span style="color:#fca5a5;font-size:13px">Couldn\'t load</span>';
   else if (callAccess && callAccess.none) { accessTxt = '<span style="font-size:14px">No alley mapped within ~230 ft</span>'; }
   else if (callAccess) {
     accessTxt = `${callAccess.where === 'rear' ? 'Rear alley' : callAccess.where === 'side' ? 'Side alley' : 'Alley'} ~${callAccess.ft} ft ${callAccess.dir}`;
-    accessSub = `<small class="statsub">${callAccess.name ? esc(callAccess.name) + ' · ' : ''}${callAccess.street ? 'front on ' + esc(callAccess.street) + ' · ' : ''}alleys in pink on map</small>`;
+    accessSub = `<small class="statsub">${callAccess.name ? esc(callAccess.name) + ' · ' : ''}${callAccess.street ? 'front on ' + esc(callAccess.street) + ' · ' : ''}alley in pink on map</small>`;
   }
 
   let haz = '<div class="loading">Checking hazard and vacant buildings…</div>', hazAlert = '';
@@ -1143,8 +1119,7 @@ function renderSheet() {
       <div class="stat box"><span>Box</span><b>${boxTxt}</b>${mineTag}</div>
       <div class="stat"><span>First due house</span><b>${house}</b></div>
       <div class="stat wide"><span>Drive from ${esc(o ? o.name : '…')} (civilian estimate)</span><b>${routeTxt}</b></div>
-      <div class="stat"><span>Building</span><b>${bldgTxt}</b>${bldgSub}</div>
-      <div class="stat"><span>Rear / alley access</span><b>${accessTxt}</b>${accessSub}</div>
+      <div class="stat wide"><span>Rear / alley access</span><b>${accessTxt}</b>${accessSub}</div>
     </div>
     <div class="btns">
       <a href="https://www.google.com/maps/dir/?api=1&destination=${dest}&travelmode=driving" target="_blank" rel="noopener">Google Maps</a>
