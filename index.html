@@ -1249,8 +1249,8 @@ function computeSides() {
   const center = [call.lng, call.lat];
   const A = callAccess.frontWalk || stepToward(callAccess.front, center, 30);
   const facing = bearing(callAccess.front, center);                  // looking at the building from the A side
-  const B = offsetFeet(center, (facing + 270) % 360, ROWHOUSE_FT);    // dwelling to the left
-  const D = offsetFeet(center, (facing + 90) % 360, ROWHOUSE_FT);     // dwelling to the right
+  let B = offsetFeet(center, (facing + 270) % 360, ROWHOUSE_FT);      // dwelling to the left
+  let D = offsetFeet(center, (facing + 90) % 360, ROWHOUSE_FT);       // dwelling to the right
   // C = the back of the building, straight behind the pin (just past the rear wall when the outline is known)
   let C = offsetFeet(center, facing, 25);
   const g = callAccess.fp;
@@ -1259,6 +1259,15 @@ function computeSides() {
     const bmax = Math.max(...(g.type === 'Polygon' ? [g.coordinates] : g.coordinates).flatMap(p => p[0])
       .map(v => (v[0] - center[0]) * k * 364000 * bx[0] + (v[1] - center[1]) * 364000 * bx[1]));
     if (isFinite(bmax) && bmax > 0) C = offsetFeet(center, facing, bmax + 10);
+    // Apartment complex: B and D on the building's own left and right walls, C at the middle of its back
+    if (callBldgInfo && /apartment/i.test(callBldgInfo.text || '')) {
+      const right = (facing + 90) % 360, ax = [Math.sin(right * Math.PI / 180), Math.cos(right * Math.PI / 180)];
+      const vs = (g.type === 'Polygon' ? [g.coordinates] : g.coordinates).flatMap(p => p[0]).map(v => [(v[0] - center[0]) * k * 364000, (v[1] - center[1]) * 364000]);
+      const rs = vs.map(v => v[0] * ax[0] + v[1] * ax[1]), bs = vs.map(v => v[0] * bx[0] + v[1] * bx[1]);
+      const rmin = Math.min(...rs), rmax = Math.max(...rs), midB = (Math.min(...bs) + Math.max(...bs)) / 2;
+      const at = (r, b) => [center[0] + (r * ax[0] + b * bx[0]) / (k * 364000), center[1] + (r * ax[1] + b * bx[1]) / 364000];
+      B = at(rmin - 15, midB); D = at(rmax + 15, midB); C = at((rmin + rmax) / 2, Math.max(...bs) + 10);
+    }
   }
   return { A, B, C, D, cLabel: 'C', walkTo: C };
 }
@@ -1324,7 +1333,7 @@ async function loadBuildingInfo(seq) {
             if (city && /rowhouse|single-family/.test(city.text)) callBldgInfo = { text: city.text, detail: callBldgInfo.detail };
           } catch (e) { /* keep the state description */ }
         }
-        if (callAccess && callAccess.front) drawFrontBack(); renderSheet(); return;
+        if (callAccess && callAccess.front) { drawFrontBack(); if (/apartment/i.test(callBldgInfo.text || '')) fitAll(); } renderSheet(); return;
       }
       stateErr = stateErr || 'no record';
       break;                                   // server answered but had nothing; don't ask the other copy
