@@ -914,29 +914,41 @@ async function runRoute() {
   window._route = 'loading'; renderSheet();
   try {
     // Aim at the front of the building (the address's own street), not whatever road is nearest the pin
-    let dest = [call.lng, call.lat];
+    let dest = [call.lng, call.lat], destDir = null;
     try {
       const info = await roadsAround(call);
       const front = frontOf(call, info);
-      if (front && front.ft <= 250) dest = front.c;
+      if (front && front.ft <= 250) { dest = front.c; destDir = (bearing(front.c, [call.lng, call.lat]) + 90) % 360; }
     } catch (e) { /* fall back to the pin */ }
     // Leave out the front of the firehouse: start on the street in the firehouse's address (e.g. W North Ave)
-    let start = [o.lng, o.lat];
+    let start = [o.lng, o.lat], startDir = null;
     if (o.address) {
       try {
         o.frontInfo = o.frontInfo || { lng: o.lng, lat: o.lat, label: o.address };
         const fi = await roadsAround(o.frontInfo);
         const f = frontOf(o.frontInfo, fi);
-        if (f && feetBetween([o.lng, o.lat], f.c) <= 300) start = f.c;   // must really be next to the firehouse
+        if (f && feetBetween([o.lng, o.lat], f.c) <= 300) {             // must really be next to the firehouse
+          start = f.c;
+          if (feetBetween([o.lng, o.lat], f.c) > 5) startDir = (bearing([o.lng, o.lat], f.c) + 90) % 360;
+        }
       } catch (e) { /* fall back to the station point */ }
     }
     if (seq !== callSeq) return;
-    const url = `https://api.mapbox.com/directions/v5/mapbox/driving/${start[0]},${start[1]};${dest[0]},${dest[1]}` +
-      `?alternatives=true&geometries=geojson&overview=full&steps=true&access_token=${MAPBOX_TOKEN}`;
-    const r = await fetch(url); const d = await r.json();
+    const base = `https://api.mapbox.com/directions/v5/mapbox/driving/`;
+    const opts = `geometries=geojson&overview=full&steps=true&access_token=${MAPBOX_TOKEN}`;
+    const r = await fetch(`${base}${start[0]},${start[1]};${dest[0]},${dest[1]}?alternatives=true&${opts}`); const d = await r.json();
     if (seq !== callSeq) return;
     if (!r.ok || !d.routes || !d.routes.length) throw new Error(d.message || 'No route found');
-    const rt = pickRoute(d.routes);
+    // The routes a driver would pick: ride the street you leave on as far as it goes toward the call, then turn;
+    // or get onto the call's street early and run along it. The middle point is a pass-through, not a stop.
+    const corners = [];
+    if (startDir != null) corners.push(alongStreet(start, startDir, dest));
+    if (destDir != null) corners.push(alongStreet(dest, destDir, start));
+    const extra = await Promise.all(corners.filter(c => c && feetBetween(c, start) > 250 && feetBetween(c, dest) > 250).map(c =>
+      fetch(`${base}${start[0]},${start[1]};${c[0]},${c[1]};${dest[0]},${dest[1]}?waypoints=0;2&${opts}`)
+        .then(x => x.json()).then(j => (j.routes || [])[0]).catch(() => null)));
+    if (seq !== callSeq) return;
+    const rt = pickRoute(d.routes.concat(extra.filter(Boolean)));
     window._route = rt;
     routeGeo = { type: 'Feature', properties: {}, geometry: rt.geometry };
     setData('route', routeGeo);
@@ -945,6 +957,15 @@ async function runRoute() {
     window._route = { error: e.message };
   }
   renderSheet();
+}
+
+function alongStreet(p, dir, target) {
+  const k = Math.cos(p[1] * Math.PI / 180), r = dir * Math.PI / 180;
+  const ux = Math.sin(r), uy = Math.cos(r);                                  // street direction (east, north)
+  const tx = (target[0] - p[0]) * k * 364000, ty = (target[1] - p[1]) * 364000;
+  const along = tx * ux + ty * uy;                                           // feet along the street
+  if (Math.abs(along) > 5280 * 3) return null;                               // ignore beyond 3 miles
+  return [p[0] + along * ux / (k * 364000), p[1] + along * uy / 364000];
 }
 
 // Route rule: the most direct route with the fewest turns.
@@ -957,7 +978,7 @@ function countTurns(rt) {
     if (['depart', 'arrive', 'new name', 'notification'].includes(type)) return false;
     if ((type === 'continue' || type === 'merge') && (mod === 'straight' || mod === 'slight left' || mod === 'slight right')) return false;
     return true;
-  }).length;
+  }).reduce((n, st) => n + ((st.maneuver || {}).modifier === 'uturn' ? 4 : 1), 0);
 }
 function pickRoute(routes) {
   const fastest = Math.min(...routes.map(r => r.duration));
