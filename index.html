@@ -21,7 +21,7 @@
     --muted: #9aa3b2;
     --accent: #ef4444;      /* call / box lines */
     --mine: #f59e0b;        /* your first-due boxes */
-    --hydrant: #facc15;
+    --hydrant: #fb923c;
     --route: #38bdf8;
     --ok: #22c55e;
   }
@@ -85,6 +85,9 @@
   .stat b { font-size: 16px; }
   .stat.wide { grid-column: 1 / -1; }
   .stat.box b { font-size: 24px; color: var(--mine); }
+  .boxrow { display: flex; align-items: center; gap: 14px; margin-top: 2px; }
+  .stat .boxnum { font-size: 30px; color: var(--mine); line-height: 1.1; white-space: nowrap; }
+  .fd { font-size: 16px; font-weight: 700; line-height: 1.25; display: flex; flex-direction: column; gap: 4px; }
   .stat .tag { width: fit-content; }
   #toast { position: fixed; left: 50%; transform: translateX(-50%); top: calc(env(safe-area-inset-top) + 120px); z-index: 25;
     background: #111827; border: 1px solid #4b5563; color: #fff; padding: 10px 14px; border-radius: 10px; font-size: 14px;
@@ -94,14 +97,14 @@
   .lockrow button { background: #1d212a; color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; font-size: 13px; cursor: pointer; }
   .statsub { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; }
   .num.bad { background: #ef4444; color: #fff; }
-  .num.caution { background: #f59e0b; color: #111; }
+  .num.caution { background: var(--hydrant); color: #111; box-shadow: 0 0 0 3px #fde047; }
   .hwarn { font-size: 13px; font-weight: 700; margin-top: 2px; }
   .hwarn.bad { color: #f87171; }
   .hwarn.caution { color: #fbbf24; }
   .warnbar { border-radius: 10px; padding: 8px 10px; margin: 4px 0 8px; font-weight: 700; font-size: 14px; }
   .warnbar.bad { background: #450a0a; border: 1px solid #ef4444; }
   .hyd-pin.bad { background: #ef4444; color: #fff; }
-  .hyd-pin.caution { background: #f59e0b; }
+  .hyd-pin.caution { box-shadow: 0 0 0 3px #fde047; }
   .btns { display: flex; gap: 8px; margin: 10px 0 4px; }
   .btns a { flex: 1; text-align: center; text-decoration: none; color: var(--text); background: #1d212a;
     border: 1px solid var(--line); border-radius: 10px; padding: 10px; font-size: 14px; }
@@ -127,7 +130,7 @@
   .loading { color: var(--muted); font-style: italic; }
 
   /* ---------- Map markers ---------- */
-  .call-pin { width: 22px; height: 22px; border-radius: 50% 50% 50% 0; background: var(--accent);
+  .call-pin { width: 22px; height: 22px; border-radius: 50% 50% 50% 0; background: #facc15;
     transform: rotate(-45deg); border: 3px solid #fff; box-shadow: 0 2px 6px rgba(0,0,0,.5); }
   .hyd-pin { width: 24px; height: 24px; border-radius: 50%; background: var(--hydrant); color: #111;
     border: 2px solid #111; font: 800 12px/20px sans-serif; text-align: center; box-shadow: 0 1px 4px rgba(0,0,0,.6); }
@@ -471,6 +474,11 @@ function addOverlays() {
   const firstSymbol = (map.getStyle().layers.find(l => l.type === 'symbol') || {}).id;
   const empty = { type: 'FeatureCollection', features: [] };
 
+  // Satellite view: hide the base map's street, alley and path lines (street names stay)
+  if (styleName === 'sat') map.getStyle().layers.forEach(l => {
+    if (l.type === 'line' && (l['source-layer'] === 'road' || /^(road|bridge|tunnel)/.test(l.id))) { try { map.setLayoutProperty(l.id, 'visibility', 'none'); } catch (e) {} }
+  });
+
   map.addSource('boxes', { type: 'geojson', data: boxes || empty });
   map.addSource('box-labels', { type: 'geojson', data: boxLabels() });
   map.addSource('route', { type: 'geojson', data: routeGeo || empty });
@@ -490,7 +498,7 @@ function addOverlays() {
   map.addLayer({ id: 'route-line', type: 'line', source: 'route', layout: { 'line-cap': 'round', 'line-join': 'round' },
     paint: { 'line-color': '#38bdf8', 'line-width': 5 } });
   map.addLayer({ id: 'area-hydrants', type: 'circle', source: 'area-hydrants', minzoom: 15.5,
-    paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 15.5, 3, 18, 7], 'circle-color': '#facc15',
+    paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 15.5, 3, 18, 7], 'circle-color': '#fb923c',
              'circle-stroke-color': '#111', 'circle-stroke-width': 1.5 } });
   map.addLayer({ id: 'box-labels', type: 'symbol', source: 'box-labels', minzoom: 12.5,
     layout: { 'text-field': ['get', 'box'], 'text-size': ['interpolate', ['linear'], ['zoom'], 12.5, 11, 16, 16],
@@ -505,8 +513,15 @@ function addOverlays() {
 
   // Only the alley that belongs to the call location is drawn (filled in after a search)
   map.addSource('callalley', { type: 'geojson', data: callAccess && callAccess.line ? callAccess.line : { type: 'FeatureCollection', features: [] } });
-  map.addLayer({ id: 'callalley', type: 'line', source: 'callalley', layout: { 'line-cap': 'round', 'line-join': 'round' },
-    paint: { 'line-color': '#e879f9', 'line-width': ['interpolate', ['linear'], ['zoom'], 14, 2, 18, 6], 'line-opacity': 0.95 } }, firstSymbol);
+  map.addLayer({ id: 'callalley', type: 'line', source: 'callalley', filter: ['==', ['geometry-type'], 'LineString'],
+    layout: { 'line-cap': 'round', 'line-join': 'round' },
+    paint: { 'line-color': '#fde047', 'line-width': ['interpolate', ['linear'], ['zoom'], 14, 3, 18, 6], 'line-dasharray': [1.5, 1] } });
+  map.addLayer({ id: 'callalley-ends', type: 'circle', source: 'callalley', filter: ['==', ['geometry-type'], 'Point'],
+    paint: { 'circle-radius': 6, 'circle-color': '#fde047', 'circle-stroke-color': '#111', 'circle-stroke-width': 2 } });
+  map.addLayer({ id: 'callalley-labels', type: 'symbol', source: 'callalley', filter: ['==', ['geometry-type'], 'Point'],
+    layout: { 'text-field': ['get', 'label'], 'text-size': 13, 'text-offset': [0, -1.2], 'text-anchor': 'bottom',
+              'text-font': ['DIN Pro Bold', 'Arial Unicode MS Bold'], 'text-allow-overlap': true },
+    paint: { 'text-color': '#fde047', 'text-halo-color': '#000', 'text-halo-width': 2 } });
 
   map.addSource('vacant', { type: 'geojson', data: areaVacant });
   map.addSource('xray', { type: 'geojson', data: areaXray });
@@ -515,7 +530,7 @@ function addOverlays() {
              'circle-stroke-color': '#111', 'circle-stroke-width': 1.2 } });
   map.addLayer({ id: 'xray', type: 'circle', source: 'xray', minzoom: 14,
     paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 14, 5, 18, 10],
-             'circle-color': ['case', ['in', 'UNSAFE', ['upcase', ['to-string', ['get', 'szType']]]], '#f97316', '#e11d48'],
+             'circle-color': ['case', ['in', 'UNSAFE', ['upcase', ['to-string', ['get', 'szType']]]], '#9333ea', '#e11d48'],
              'circle-stroke-color': '#fff', 'circle-stroke-width': 1.5 } });
   map.addLayer({ id: 'xray-x', type: 'symbol', source: 'xray', minzoom: 15,
     layout: { 'text-field': 'X', 'text-size': 11, 'text-font': ['DIN Pro Bold', 'Arial Unicode MS Bold'], 'text-allow-overlap': true },
@@ -550,6 +565,7 @@ function boxStyle() {
 function setData(src, data) { const s = map.getSource(src); if (s) s.setData(data); }
 function refreshBoxFilters() {
   if (!window.map) return;
+  ['boxes-line', 'box-labels'].forEach(id => { if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', call ? 'none' : 'visible'); });
   const st = boxStyle();
   if (map.getLayer('boxes-mine')) {
     map.setFilter('boxes-mine', st.fillFilter);
@@ -860,7 +876,15 @@ async function runRoute() {
   if (!call || !o) { renderSheet(); return; }
   window._route = 'loading'; renderSheet();
   try {
-    const url = `https://api.mapbox.com/directions/v5/mapbox/driving/${o.lng},${o.lat};${call.lng},${call.lat}` +
+    // Aim at the front of the building (the address's own street), not whatever road is nearest the pin
+    let dest = [call.lng, call.lat];
+    try {
+      const info = await roadsAround(call);
+      const front = frontOf(call, info);
+      if (front && front.ft <= 250) dest = front.c;
+    } catch (e) { /* fall back to the pin */ }
+    if (seq !== callSeq) return;
+    const url = `https://api.mapbox.com/directions/v5/mapbox/driving/${o.lng},${o.lat};${dest[0]},${dest[1]}` +
       `?geometries=geojson&overview=full&steps=true&access_token=${MAPBOX_TOKEN}`;
     const r = await fetch(url); const d = await r.json();
     if (seq !== callSeq) return;
@@ -902,34 +926,62 @@ async function loadNearHydrants(seq) {
   renderSheet(); fitAll();
 }
 
+// Street-name matching: "2804 Presbury Street" and "Presbury St" -> ['presbury']
+const SUFFIX = { street: 'st', st: 'st', avenue: 'ave', ave: 'ave', av: 'ave', road: 'rd', rd: 'rd', boulevard: 'blvd', blvd: 'blvd',
+  drive: 'dr', dr: 'dr', lane: 'ln', ln: 'ln', la: 'ln', place: 'pl', pl: 'pl', court: 'ct', ct: 'ct', terrace: 'ter', ter: 'ter',
+  way: 'way', parkway: 'pkwy', pkwy: 'pkwy', highway: 'hwy', hwy: 'hwy', circle: 'cir', cir: 'cir', square: 'sq', alley: 'aly' };
+const DIRS = { north: 'n', n: 'n', south: 's', s: 's', east: 'e', e: 'e', west: 'w', w: 'w' };
+function streetCore(name) {
+  let t = String(name || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/).filter(Boolean);
+  while (t.length && /^\d+[a-z]?$/.test(t[0]) && !/(st|nd|rd|th)$/.test(t[0])) t.shift();   // drop the house number
+  if (t.length > 2 && DIRS[t[0]]) t.shift();                                                // leading W / N / ...
+  if (t.length > 1 && SUFFIX[t[t.length - 1]]) t.pop();                                      // trailing St / Ave / ...
+  return t.join(' ');
+}
+
+// One lookup per call of the roads around the address (Mapbox road data), shared by routing and access
+function roadsAround(c) {
+  if (c.roadsPromise) return c.roadsPromise;
+  const url = `https://api.mapbox.com/v4/mapbox.mapbox-streets-v8/tilequery/${c.lng},${c.lat}.json` +
+    `?radius=70&limit=50&layers=road&geometry=linestring&dedupe=true&access_token=${MAPBOX_TOKEN}`;
+  c.roadsPromise = fetch(url).then(async r => {
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.message || ('HTTP ' + r.status));
+    const roads = (d.features || []).map(f => ({ p: f.properties || {}, c: f.geometry && f.geometry.coordinates,
+      ft: Math.round(((f.properties || {}).tilequery || {}).distance * 3.281) })).filter(x => x.c);
+    const isStreet = x => ['street', 'street_limited', 'secondary', 'tertiary', 'primary', 'trunk', 'motorway_link', 'trunk_link',
+      'primary_link', 'secondary_link', 'tertiary_link'].includes(x.p.class) && x.p.name;
+    const isAlley = x => x.p.class === 'service' && x.p.type === 'service:alley';
+    const streets = roads.filter(isStreet).sort((a, b) => a.ft - b.ft);
+    return { streets, alleys: roads.filter(isAlley).sort((a, b) => a.ft - b.ft) };
+  });
+  return c.roadsPromise;
+}
+// The front of the building: closest point on the street named in the address (else the nearest named street)
+function frontOf(c, info) {
+  const core = streetCore(c.label);
+  const named = core ? info.streets.find(x => streetCore(x.p.name) === core) : null;
+  return named || info.streets[0] || null;
+}
+
 // Where the nearest alley is (rear or side) relative to the address
 async function loadBuildingAndAccess(seq) {
   const pt = [call.lng, call.lat];
   const center = pt;
-  // Alleys and the front street near the address (Mapbox road data)
   try {
-    const url = `https://api.mapbox.com/v4/mapbox.mapbox-streets-v8/tilequery/${center[0]},${center[1]}.json` +
-      `?radius=70&limit=50&layers=road&geometry=linestring&dedupe=true&access_token=${MAPBOX_TOKEN}`;
-    const r = await fetch(url); const d = await r.json();
+    const info = await roadsAround(call);
     if (seq !== callSeq) return;
-    if (!r.ok) throw new Error(d.message || ('HTTP ' + r.status));
-    const roads = (d.features || []).map(f => ({ p: f.properties || {}, c: f.geometry && f.geometry.coordinates,
-      ft: Math.round(((f.properties || {}).tilequery || {}).distance * 3.281) })).filter(x => x.c);
-    const isAlley = x => x.p.class === 'service' && x.p.type === 'service:alley';
-    const isStreet = x => ['street', 'street_limited', 'secondary', 'tertiary', 'primary', 'trunk'].includes(x.p.class) && x.p.name;
-    const alley = roads.filter(isAlley).sort((a, b) => a.ft - b.ft)[0];
-    const street = roads.filter(isStreet).sort((a, b) => a.ft - b.ft)[0];
-    if (!alley) callAccess = { none: true, street: street ? street.p.name : null };
-    else {
-      const ab = bearing(center, alley.c);
-      let where = '';
-      if (street) {
-        const gap = angleGap(ab, bearing(center, street.c));
-        where = gap >= 120 ? 'rear' : gap >= 50 ? 'side' : 'front side';
-      }
-      callAccess = { ft: alley.ft, dir: compass(ab), where, name: alley.p.name || '', street: street ? street.p.name : null, pt: alley.c };
-      drawCallAlley(seq);
-    }
+    const front = frontOf(call, info);
+    // Prefer an alley on the opposite side from the front street (true rear); else the nearest alley
+    const withSide = info.alleys.map(a => {
+      const gap = front ? angleGap(bearing(center, a.c), bearing(center, front.c)) : null;
+      return { a, gap, where: gap == null ? '' : gap >= 120 ? 'rear' : gap >= 50 ? 'side' : 'front side' };
+    });
+    const pick = withSide.find(x => x.where === 'rear') || withSide.find(x => x.where === 'side') || withSide[0];
+    if (!pick) callAccess = { none: true, street: front ? front.p.name : null, front: front ? front.c : null };
+    else callAccess = { ft: pick.a.ft, dir: compass(bearing(center, pick.a.c)), where: pick.where, name: pick.a.p.name || '',
+                        street: front ? front.p.name : null, front: front ? front.c : null, pt: pick.a.c };
+    drawFrontBack();
   } catch (e) {
     if (seq !== callSeq) return;
     callAccess = { error: e.message || String(e) };
@@ -937,32 +989,19 @@ async function loadBuildingAndAccess(seq) {
   renderSheet();
 }
 
-// Find the alley line under the closest-alley point in the map's loaded street data and draw only that one
-function drawCallAlley(seq, tries = 0) {
-  if (seq !== callSeq || !callAccess || !callAccess.pt || !window.map) return;
-  let feats = [];
-  try { feats = map.querySourceFeatures('composite', { sourceLayer: 'road' }) || []; } catch (e) { feats = []; }
-  const alleys = feats.filter(f => f.properties && f.properties.class === 'service' && f.properties.type === 'service:alley');
-  const lines = f => f.geometry.type === 'LineString' ? [f.geometry.coordinates] : f.geometry.type === 'MultiLineString' ? f.geometry.coordinates : [];
-  const pt = callAccess.pt, k = Math.cos(pt[1] * Math.PI / 180);
-  const dist = f => Math.min(...lines(f).map(l => {
-    let best = Infinity;
-    for (let i = 0; i < l.length - 1; i++) {
-      const ax = (l[i][0] - pt[0]) * k, ay = l[i][1] - pt[1], bx = (l[i + 1][0] - pt[0]) * k, by = l[i + 1][1] - pt[1];
-      const dx = bx - ax, dy = by - ay, L = dx * dx + dy * dy, t = L ? Math.max(0, Math.min(1, -(ax * dx + ay * dy) / L)) : 0;
-      best = Math.min(best, Math.hypot(ax + t * dx, ay + t * dy));
-    }
-    return best * 364000;   // feet
-  }), Infinity);
-  const near = alleys.map(f => ({ f, ft: dist(f) })).filter(x => x.ft < 10).sort((a, b) => a.ft - b.ft);
-  if (!near.length) {
-    if (tries < 6) setTimeout(() => drawCallAlley(seq, tries + 1), 700);   // street tiles may still be loading
-    return;
+// The only access line on the map: front of the building -> address -> rear alley
+function drawFrontBack() {
+  const fc = { type: 'FeatureCollection', features: [] };
+  if (call && callAccess && callAccess.front && callAccess.pt) {
+    const mid = [call.lng, call.lat];
+    fc.features.push({ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: [callAccess.front, mid, callAccess.pt] } });
+    fc.features.push({ type: 'Feature', properties: { label: 'FRONT' }, geometry: { type: 'Point', coordinates: callAccess.front } });
+    fc.features.push({ type: 'Feature', properties: { label: callAccess.where === 'rear' ? 'REAR' : 'ALLEY' }, geometry: { type: 'Point', coordinates: callAccess.pt } });
+  } else if (call && callAccess && callAccess.front) {
+    fc.features.push({ type: 'Feature', properties: { label: 'FRONT' }, geometry: { type: 'Point', coordinates: callAccess.front } });
   }
-  const id = near[0].f.id;
-  const pick = near.filter(x => id == null ? x === near[0] : x.f.id === id);
-  callAccess.line = { type: 'FeatureCollection', features: pick.map(x => ({ type: 'Feature', properties: {}, geometry: x.f.geometry })) };
-  setData('callalley', callAccess.line);
+  if (callAccess) callAccess.line = fc;
+  setData('callalley', fc);
 }
 
 async function loadNearHazards(seq) {
@@ -1047,7 +1086,7 @@ function renderSheet() {
   let routeTxt = '<span class="loading">routing…</span>';
   if (!o) routeTxt = 'Waiting for GPS…';
   else if (rt && rt.error) routeTxt = 'No route: ' + esc(rt.error);
-  else if (rt && rt.duration != null) routeTxt = `${fmtMin(rt.duration)} · ${fmtMi(rt.distance)}`;
+  else if (rt && rt.duration != null) routeTxt = `${fmtMi(rt.distance)} · about ${fmtMin(rt.duration)}`;
 
   const dest = `${call.lat},${call.lng}`;
   let hyd = '<div class="loading">Finding hydrants…</div>';
@@ -1077,7 +1116,7 @@ function renderSheet() {
   else if (callAccess && callAccess.none) { accessTxt = '<span style="font-size:14px">No alley mapped within ~230 ft</span>'; }
   else if (callAccess) {
     accessTxt = `${callAccess.where === 'rear' ? 'Rear alley' : callAccess.where === 'side' ? 'Side alley' : 'Alley'} ~${callAccess.ft} ft ${callAccess.dir}`;
-    accessSub = `<small class="statsub">${callAccess.name ? esc(callAccess.name) + ' · ' : ''}${callAccess.street ? 'front on ' + esc(callAccess.street) + ' · ' : ''}alley in pink on map</small>`;
+    accessSub = `<small class="statsub">${callAccess.name ? esc(callAccess.name) + ' · ' : ''}${callAccess.street ? 'front on ' + esc(callAccess.street) + ' · ' : ''}yellow line on map: front to rear</small>`;
   }
 
   let haz = '<div class="loading">Checking hazard and vacant buildings…</div>', hazAlert = '';
@@ -1090,7 +1129,7 @@ function renderSheet() {
       parts.push(nearXray.length ? nearXray.map(h => {
         const t = clean(h.p.szType) || 'Hazard', unsafe = /UNSAFE/i.test(t);
         const notes = clean(h.p.szText);
-        return `<div class="hyd"><div class="num" style="background:${unsafe ? '#f97316' : '#e11d48'};color:#fff">X</div><div>
+        return `<div class="hyd"><div class="num" style="background:${unsafe ? '#9333ea' : '#e11d48'};color:#fff">X</div><div>
           <div class="main">${esc(clean(h.p.szLocation) || [h.p.nHouseNum, h.p.szStreet].filter(Boolean).join(' '))} <span class="tag" style="background:#4c0519;color:#fda4af">${esc(t)}</span><span class="tag">${Math.round(h.ft)} ft</span></div>
           ${notes ? `<div class="sub">${esc(notes.length > 140 ? notes.slice(0, 140) + '…' : notes)}</div>` : ''}</div></div>`;
       }).join('') : '<div class="hint">No Code X-Ray, Code X or Unsafe buildings within 600 ft.</div>');
@@ -1116,20 +1155,21 @@ function renderSheet() {
     <div class="lockrow"><span>🔒 Locked: map taps won't move it</span><button id="clearCall">Clear call</button></div>
     ${hazAlert}
     <div class="stats">
-      <div class="stat box"><span>Box</span><b>${boxTxt}</b>${mineTag}</div>
-      <div class="stat"><span>First due house</span><b>${house}</b></div>
-      <div class="stat wide"><span>Drive from ${esc(o ? o.name : '…')} (civilian estimate)</span><b>${routeTxt}</b></div>
-      <div class="stat wide"><span>Rear / alley access</span><b>${accessTxt}</b>${accessSub}</div>
-    </div>
-    <div class="btns">
-      <a href="https://www.google.com/maps/dir/?api=1&destination=${dest}&travelmode=driving" target="_blank" rel="noopener">Google Maps</a>
-      <a href="https://maps.apple.com/?daddr=${dest}&dirflg=d" target="_blank" rel="noopener">Apple Maps</a>
+      <div class="stat wide boxcard"><span>Box · first due house</span>
+        <div class="boxrow"><b class="boxnum">${boxTxt}</b><div class="fd">${house}${mineTag}</div></div></div>
+      <div class="stat wide"><span>Miles and estimated time from ${esc(o ? o.name : '…')}</span><b>${routeTxt}</b></div>
     </div>
     ${dirSection}
     <h3>Nearest hydrants</h3>
     ${hyd}
+    <h3>Rear / alley access</h3>
+    <div class="stat wide"><b>${accessTxt}</b>${accessSub}</div>
     <h3>Code X-Ray and vacant buildings</h3>
     ${haz}
+    <div class="btns" style="margin-top:14px">
+      <a href="https://www.google.com/maps/dir/?api=1&destination=${dest}&travelmode=driving" target="_blank" rel="noopener">Google Maps</a>
+      <a href="https://maps.apple.com/?daddr=${dest}&dirflg=d" target="_blank" rel="noopener">Apple Maps</a>
+    </div>
     <p class="fine">Reference and study tool. Drive times are normal-traffic estimates, and box lines and hydrants come from Baltimore City's public 911-CAD map data. Always go by dispatch and your unit's terminal.</p>`;
 
   const cc = $('clearCall');
