@@ -433,7 +433,7 @@ function start() {
   try {
     window.map = new mapboxgl.Map({
       container: 'map', style: STYLES[styleName],
-      center: [DEFAULT_HOUSE.lng, DEFAULT_HOUSE.lat - 0.00029], zoom: 17.6,   // close-up on the firehouse, North Ave in view attributionControl: true
+      center: [DEFAULT_HOUSE.lng, DEFAULT_HOUSE.lat - 0.00029], zoom: 17.6, attributionControl: true   // close-up on the firehouse
     });
   } catch (e) {
     showBanner("<strong>The map couldn't start on this device.</strong> " + esc(e.message));
