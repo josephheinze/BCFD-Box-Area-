@@ -475,12 +475,13 @@ async function pickBuildingAt(p) {
   let onBldg = true;
   try {
     const r = await cityQuery(BUILDINGS_LAYER, { geometry: `${p[0]},${p[1]}`, geometryType: 'esriGeometryPoint', inSR: '4326',
-      spatialRel: 'esriSpatialRelIntersects', outFields: 'OBJECTID', returnGeometry: 'false' });
+      spatialRel: 'esriSpatialRelIntersects', distance: '25', units: 'esriSRUnit_Foot',      // on the building or just in front / behind it
+      outFields: 'OBJECTID', returnGeometry: 'false' });
     onBldg = (r.features || []).length > 0;
   } catch (err) { onBldg = true; }          // city building data unreachable: don't block the tap
   tapBusy = false;
   if (call) return;                          // a search set the call while we were checking
-  if (!onBldg) { toast('Tap on the building itself, not the road or sidewalk.'); return; }
+  if (!onBldg) { toast('Tap on or right next to the building.'); return; }
   setCall({ lng: p[0], lat: p[1], label: null });
 }
 
@@ -558,10 +559,10 @@ function addOverlays() {
     paint: { 'text-color': '#fff' } });
   map.addLayer({ id: 'xray', type: 'circle', source: 'xray', minzoom: 14,
     paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 14, 5, 18, 10],
-             'circle-color': ['case', ['in', 'UNSAFE', ['upcase', ['to-string', ['get', 'szType']]]], '#9333ea', '#e11d48'],
+             'circle-color': ['case', ['any', ['==', ['upcase', ['to-string', ['get', 'szType']]], 'DNG'], ['in', 'UNSAFE', ['upcase', ['to-string', ['get', 'szType']]]], ['in', 'DANGER', ['upcase', ['to-string', ['get', 'szType']]]]], '#9333ea', '#e11d48'],   // purple = unsafe / dangerous condition
              'circle-stroke-color': '#fff', 'circle-stroke-width': 1.5 } });
   map.addLayer({ id: 'xray-x', type: 'symbol', source: 'xray', minzoom: 15,
-    layout: { 'text-field': 'X', 'text-size': 11, 'text-font': ['DIN Pro Bold', 'Arial Unicode MS Bold'], 'text-allow-overlap': true, 'text-ignore-placement': true },
+    layout: { 'text-field': ['case', ['any', ['==', ['upcase', ['to-string', ['get', 'szType']]], 'DNG'], ['in', 'UNSAFE', ['upcase', ['to-string', ['get', 'szType']]]], ['in', 'DANGER', ['upcase', ['to-string', ['get', 'szType']]]]], 'D', 'X'], 'text-size': 11, 'text-font': ['DIN Pro Bold', 'Arial Unicode MS Bold'], 'text-allow-overlap': true, 'text-ignore-placement': true },
     paint: { 'text-color': '#fff' } });
   map.on('click', 'xray', e => new mapboxgl.Popup({ offset: 8 }).setLngLat(e.lngLat).setHTML(xrayHTML(e.features[0].properties)).addTo(map));
   map.on('click', 'vacant', e => new mapboxgl.Popup({ offset: 8 }).setLngLat(e.lngLat).setHTML(vacantHTML(e.features[0].properties)).addTo(map));
@@ -1563,9 +1564,9 @@ function renderSheet() {
       if (nearXray.length && nearXray[0].ft <= 80)
         hazAlert = `<div style="background:#4c0519;border:1px solid #e11d48;border-radius:10px;padding:8px 10px;margin:8px 0;font-weight:700">⚠ ${esc(clean(nearXray[0].p.szType) || 'Hazard')} building at or next to this address</div>`;
       parts.push(nearXray.length ? nearXray.map(h => {
-        const t = clean(h.p.szType) || 'Hazard', unsafe = /UNSAFE/i.test(t);
+        const t = clean(h.p.szType) || 'Hazard', unsafe = /^DNG$|UNSAFE|DANGER/i.test(t);   // DNG = dangerous condition
         const notes = clean(h.p.szText);
-        return `<div class="hyd"><div class="num" style="background:${unsafe ? '#9333ea' : '#e11d48'};color:#fff">X</div><div>
+        return `<div class="hyd"><div class="num" style="background:${unsafe ? '#9333ea' : '#e11d48'};color:#fff">${unsafe ? 'D' : 'X'}</div><div>
           <div class="main">${esc(clean(h.p.szLocation) || [h.p.nHouseNum, h.p.szStreet].filter(Boolean).join(' '))} <span class="tag" style="background:#4c0519;color:#fda4af">${esc(t)}</span><span class="tag">${Math.round(h.ft)} ft</span></div>
           ${notes ? `<div class="sub">${esc(notes.length > 140 ? notes.slice(0, 140) + '…' : notes)}</div>` : ''}</div></div>`;
       }).join('') : '<div class="hint">No Code X-Ray, Code X or Unsafe buildings within 600 ft.</div>');
