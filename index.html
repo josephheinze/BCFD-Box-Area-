@@ -1119,7 +1119,10 @@ function fitAll() {
   if (callAccess && callAccess.front) {
     const facing = bearing(callAccess.front, c0);
     // farthest of A / C, plus room so the B and D houses aren't cut off
-    const reach = Math.max(feetBetween(c0, stepToward(callAccess.front, c0, 30)), callAccess.pt ? feetBetween(c0, callAccess.pt) : 0, 45) * 1.35 + 15;
+    let reach = Math.max(feetBetween(c0, stepToward(callAccess.front, c0, 30)), callAccess.pt ? feetBetween(c0, callAccess.pt) : 0, 45) * 1.35 + 15;
+    // widen just enough (same on every side, so the house stays centered) to keep hydrant #1 on screen
+    const h1 = Array.isArray(nearHydrants) && nearHydrants[0];
+    if (h1 && h1.ft <= 350) reach = Math.max(reach, feetBetween(c0, [h1.lng, h1.lat]) + 25);
     // same distance out on all four sides, so the house stays in the middle
     [0, 90, 180, 270].forEach(t => b.extend(offsetFeet(c0, (facing + t) % 360, reach)));
   }
