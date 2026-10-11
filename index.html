@@ -1148,6 +1148,18 @@ async function callFootprint(pt) {
   return c && c.ft <= 60 ? c.g : null;
 }
 
+// A point inside the building outline (the middle if it's inside, else the first spot inside heading from the pin)
+function insidePoint(g, pt) {
+  const c = labelPoint(g);
+  if (!c) return pt;
+  if (pointInGeo(c, g)) return c;
+  for (let t = 0.05; t <= 1.001; t += 0.05) {
+    const p = [pt[0] + (c[0] - pt[0]) * t, pt[1] + (c[1] - pt[1]) * t];
+    if (pointInGeo(p, g)) return p;
+  }
+  return c;
+}
+
 // Where A, B, C, D go (and where the walking line should end), seen standing on the A side
 function computeSides() {
   const center = [call.lng, call.lat];
@@ -1215,7 +1227,13 @@ const BLDG_FIELDS = 'ADDRESS,STRTNUM,STRTNAM,DESCSTYL,STRUSTYL,DESCBLDG,STRUBLDG
 
 async function loadBuildingInfo(seq) {
   const pt = [call.lng, call.lat];
-  const near = { geometry: `${pt[0]},${pt[1]}`, geometryType: 'esriGeometryPoint', inSR: '4326',
+  // The pin often lands on the sidewalk; big complexes are recorded under one address in the middle of the lot.
+  // So look records up from a point inside the building's own outline.
+  let fpG = null;
+  try { fpG = await callFootprint(pt); } catch (e) { /* use the pin */ }
+  if (seq !== callSeq) return;
+  const inPt = fpG ? insidePoint(fpG, pt) : pt;
+  const near = { geometry: `${inPt[0]},${inPt[1]}`, geometryType: 'esriGeometryPoint', inSR: '4326',
                  spatialRel: 'esriSpatialRelIntersects', units: 'esriSRUnit_Meter', outFields: BLDG_FIELDS, returnGeometry: 'true' };
   const num = ((call.label || '').match(/^\s*(\d+)/) || [])[1];
   const street = streetCore(call.label || '').split(' ')[0];
@@ -1232,7 +1250,7 @@ async function loadBuildingInfo(seq) {
       if (!recs.length) {
         const d = await cityQuery(0, Object.assign({}, near, { distance: '35', where: '1=1' }), src);
         recs = (d.features || []).filter(f => f.geometry)
-          .sort((a, b) => feetBetween(pt, [a.geometry.x, a.geometry.y]) - feetBetween(pt, [b.geometry.x, b.geometry.y]));
+          .sort((a, b) => feetBetween(inPt, [a.geometry.x, a.geometry.y]) - feetBetween(inPt, [b.geometry.x, b.geometry.y]));
       }
       if (seq !== callSeq) return;
       if (recs.length) { callBldgInfo = describeBuilding(recs[0].attributes || {}); if (callAccess && callAccess.front) drawFrontBack(); renderSheet(); return; }
@@ -1242,7 +1260,7 @@ async function loadBuildingInfo(seq) {
   }
   // 2) Backup: build it from the city's own data (works where the state's servers refuse the app)
   try {
-    const info = await describeFromCity(pt);
+    const info = await describeFromCity(pt, inPt);
     if (seq !== callSeq) return;
     callBldgInfo = info || { none: true };
     if (callAccess && callAccess.front) drawFrontBack();
@@ -1254,12 +1272,13 @@ async function loadBuildingInfo(seq) {
 }
 
 // City data: stories from building outlines, middle/end of group from shared walls, units from Real Property
-async function describeFromCity(pt) {
+async function describeFromCity(pt, inPt) {
+  inPt = inPt || pt;
   const d = 0.0006, dLat = d * 0.77;
   const [fp, rp] = await Promise.all([
     cityQuery(BUILDINGS_LAYER, { geometry: [pt[0] - d, pt[1] - dLat, pt[0] + d, pt[1] + dLat].join(','), geometryType: 'esriGeometryEnvelope',
       inSR: '4326', spatialRel: 'esriSpatialRelIntersects', outFields: 'NUMSTORIES,BLDGHEIGHT', returnGeometry: 'true', geometryPrecision: '7' }),
-    cityQuery(12, { geometry: `${pt[0]},${pt[1]}`, geometryType: 'esriGeometryPoint', inSR: '4326', spatialRel: 'esriSpatialRelIntersects',
+    cityQuery(12, { geometry: `${inPt[0]},${inPt[1]}`, geometryType: 'esriGeometryPoint', inSR: '4326', spatialRel: 'esriSpatialRelIntersects',
       outFields: 'FULLADDR,PROPDESC,DWELUNIT,EFF_UNIT,ROOMUNIT,USEGROUP,YEAR_BUILD,STRUCTAREA', returnGeometry: 'false' }, VACANT_SVC)
       .catch(() => ({ features: [] }))
   ]);
@@ -1279,7 +1298,7 @@ async function describeFromCity(pt) {
   const desc = clean(prop.PROPDESC).toUpperCase();
 
   // row position
-  let pos = null;
+  let pos = null, areaFt = 0;
   if (me) {
     const ringsOf = g => (g.type === 'Polygon' ? [g.coordinates] : g.coordinates).map(p => p[0]);
     const touches = (g1, g2) => ringsOf(g1).some(r => r.some(v => feetToPolygon(v, g2) < 2));
@@ -1291,11 +1310,13 @@ async function describeFromCity(pt) {
     const ang = 0.5 * Math.atan2(2 * sxy, sxx - syy), ux = Math.cos(ang), uy = Math.sin(ang);
     const along = vs.map(([x, y]) => x * ux + y * uy), across = vs.map(([x, y]) => -x * uy + y * ux);
     const L = Math.max(...along) - Math.min(...along), W = Math.max(...across) - Math.min(...across);
-    if (L > 90 && L > 2.2 * W) {
+    for (let i = 0; i < vs.length - 1; i++) areaFt += vs[i][0] * vs[i + 1][1] - vs[i + 1][0] * vs[i][1];
+    areaFt = Math.abs(areaFt) / 2;
+    if (L > 90 && L > 2.2 * W && W < 90 && !(stories >= 4)) {          // a row of houses drawn as one outline (rowhouses are 3 stories or less)
       const fromEnd = Math.min(0 - Math.min(...along), Math.max(...along) - 0);   // the address is at 0
       pos = fromEnd < 25 ? 'end' : 'middle';
     } else {
-      pos = neighbors >= 2 ? 'middle' : neighbors === 1 ? 'end' : 'detached';
+      pos = areaFt > 3500 ? 'large' : neighbors >= 2 ? 'middle' : neighbors === 1 ? 'end' : 'detached';   // rowhouses are well under 3,500 sq ft
     }
   }
   let text;
@@ -1303,6 +1324,7 @@ async function describeFromCity(pt) {
   else if (/COMM|STORE|OFFICE|RETAIL|INDUST|WAREH|CHURCH|SCHOOL/.test(desc)) text = `Commercial: ${clean(prop.PROPDESC)}`;
   else if (pos === 'middle') text = `${st}middle-of-group rowhouse`;
   else if (pos === 'end') text = `${st}end-of-group rowhouse`;
+  else if (pos === 'large' || (pos === 'detached' && stories >= 4)) text = `${st}large building · apartments or commercial (type not on record)`;
   else if (pos === 'detached') text = `${st}single-family (detached)`;
   else text = `${st}building`;
   const yr = Number(prop.YEAR_BUILD);
