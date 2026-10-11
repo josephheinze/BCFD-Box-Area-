@@ -95,6 +95,7 @@
   .lockrow { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: -4px 0 10px; }
   .lockrow span { color: var(--muted); font-size: 13px; }
   .lockrow button { background: #1d212a; color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; font-size: 13px; cursor: pointer; }
+  .walk { font-size: 15px; font-weight: 600; margin-top: 6px; }
   .statsub { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; }
   .num.bad { background: #ef4444; color: #fff; }
   .num.caution { background: var(--hydrant); color: #111; box-shadow: 0 0 0 3px #fde047; }
@@ -953,10 +954,30 @@ function roadsAround(c) {
       'primary_link', 'secondary_link', 'tertiary_link'].includes(x.p.class) && x.p.name;
     const isAlley = x => x.p.class === 'service' && x.p.type === 'service:alley';
     const streets = roads.filter(isStreet).sort((a, b) => a.ft - b.ft);
-    return { streets, alleys: roads.filter(isAlley).sort((a, b) => a.ft - b.ft) };
+    // Streets out to about 700 ft, to find the side streets at each end of the row
+    let wide = [];
+    try {
+      const r2 = await fetch(`https://api.mapbox.com/v4/mapbox.mapbox-streets-v8/tilequery/${c.lng},${c.lat}.json` +
+        `?radius=220&limit=50&layers=road&geometry=linestring&dedupe=true&access_token=${MAPBOX_TOKEN}`);
+      const d2 = await r2.json();
+      if (r2.ok) wide = (d2.features || []).map(f => ({ p: f.properties || {}, c: f.geometry && f.geometry.coordinates,
+        ft: Math.round(((f.properties || {}).tilequery || {}).distance * 3.281) })).filter(x => x.c && isStreet(x));
+    } catch (e) { /* side streets are optional */ }
+    return { streets, alleys: roads.filter(isAlley).sort((a, b) => a.ft - b.ft), wide };
   });
   return c.roadsPromise;
 }
+
+// Walking route (sidewalks, paths, alleys) through the given points; null if none
+async function walkRoute(points) {
+  const url = `https://api.mapbox.com/directions/v5/mapbox/walking/${points.map(p => p[0] + ',' + p[1]).join(';')}` +
+    `?geometries=geojson&overview=full&access_token=${MAPBOX_TOKEN}`;
+  const r = await fetch(url); const d = await r.json();
+  if (!r.ok || !d.routes || !d.routes.length) return null;
+  return { geometry: d.routes[0].geometry, ft: Math.round(d.routes[0].distance * 3.281) };
+}
+// Signed turn from bearing a to bearing b, -180..180
+const signedTurn = (a, b) => ((b - a + 540) % 360) - 180;
 // The front of the building: closest point on the street named in the address (else the nearest named street)
 function frontOf(c, info) {
   const core = streetCore(c.label);
@@ -980,8 +1001,30 @@ async function loadBuildingAndAccess(seq) {
     const pick = withSide.find(x => x.where === 'rear') || withSide.find(x => x.where === 'side') || withSide[0];
     if (!pick) callAccess = { none: true, street: front ? front.p.name : null, front: front ? front.c : null };
     else callAccess = { ft: pick.a.ft, dir: compass(bearing(center, pick.a.c)), where: pick.where, name: pick.a.p.name || '',
-                        street: front ? front.p.name : null, front: front ? front.c : null, pt: pick.a.c };
+                        street: front ? front.p.name : null, front: front ? front.c : null, pt: pick.a.c, walks: null };
     drawFrontBack();
+    renderSheet();
+    if (callAccess.front && callAccess.pt) {
+      // Side streets at each end of the row: named streets off to the left and right of the front street
+      const bf = bearing(center, callAccess.front), frontCore = streetCore(front.p.name);
+      const sides = { left: null, right: null };
+      (info.wide || []).forEach(x => {
+        if (streetCore(x.p.name) === frontCore) return;
+        const t = signedTurn(bf, bearing(center, x.c));
+        const side = t <= -35 && t >= -145 ? 'left' : t >= 35 && t <= 145 ? 'right' : null;
+        if (side && (!sides[side] || x.ft < sides[side].ft)) sides[side] = x;
+      });
+      const tries = [];
+      ['left', 'right'].forEach(k => { if (sides[k]) tries.push(walkRoute([callAccess.front, sides[k].c, callAccess.pt]).then(w => w && Object.assign(w, { via: sides[k].p.name, dir: compass(bearing(center, sides[k].c)) }))); });
+      if (!tries.length) tries.push(walkRoute([callAccess.front, callAccess.pt]).then(w => w && Object.assign(w, { via: '', dir: '' })));
+      const walks = (await Promise.all(tries.map(p => p.catch(() => null)))).filter(Boolean)
+        .filter(w => w.ft < 3000)                                 // ignore silly detours
+        .sort((a, b) => a.ft - b.ft);
+      if (seq !== callSeq) return;
+      callAccess.walks = walks;
+      drawFrontBack();
+      fitAll();
+    }
   } catch (e) {
     if (seq !== callSeq) return;
     callAccess = { error: e.message || String(e) };
@@ -993,8 +1036,7 @@ async function loadBuildingAndAccess(seq) {
 function drawFrontBack() {
   const fc = { type: 'FeatureCollection', features: [] };
   if (call && callAccess && callAccess.front && callAccess.pt) {
-    const mid = [call.lng, call.lat];
-    fc.features.push({ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: [callAccess.front, mid, callAccess.pt] } });
+    (callAccess.walks || []).forEach(w => fc.features.push({ type: 'Feature', properties: {}, geometry: w.geometry }));
     fc.features.push({ type: 'Feature', properties: { label: 'FRONT' }, geometry: { type: 'Point', coordinates: callAccess.front } });
     fc.features.push({ type: 'Feature', properties: { label: callAccess.where === 'rear' ? 'REAR' : 'ALLEY' }, geometry: { type: 'Point', coordinates: callAccess.pt } });
   } else if (call && callAccess && callAccess.front) {
@@ -1023,6 +1065,7 @@ function fitAll() {
   // Close-up on the address, keeping the nearest hydrants (within about 400 ft) in view
   const b = new mapboxgl.LngLatBounds([call.lng, call.lat], [call.lng, call.lat]);
   (Array.isArray(nearHydrants) ? nearHydrants : []).filter(h => h.ft <= 400).slice(0, 3).forEach(h => b.extend([h.lng, h.lat]));
+  if (callAccess && callAccess.walks) callAccess.walks.forEach(w => w.geometry.coordinates.forEach(c => b.extend(c)));
   const top = $('topbar').offsetHeight + 20;
   const wide = window.innerWidth >= 820;
   const bottom = wide ? 40 : Math.min($('sheet').offsetHeight, window.innerHeight * 0.5) + 20;
@@ -1116,7 +1159,12 @@ function renderSheet() {
   else if (callAccess && callAccess.none) { accessTxt = '<span style="font-size:14px">No alley mapped within ~230 ft</span>'; }
   else if (callAccess) {
     accessTxt = `${callAccess.where === 'rear' ? 'Rear alley' : callAccess.where === 'side' ? 'Side alley' : 'Alley'} ~${callAccess.ft} ft ${callAccess.dir}`;
-    accessSub = `<small class="statsub">${callAccess.name ? esc(callAccess.name) + ' · ' : ''}${callAccess.street ? 'front on ' + esc(callAccess.street) + ' · ' : ''}yellow line on map: front to rear</small>`;
+    const ways = callAccess.walks == null ? '<div class="sub loading">Finding the ways around back…</div>'
+      : callAccess.walks.length ? callAccess.walks.map((w, i) =>
+          `<div class="walk">${i === 0 ? 'Shortest' : 'Other way'}: ${w.via ? 'via ' + esc(w.via) : 'around the row'}${w.dir ? ' (' + w.dir + ')' : ''} <span class="tag">~${w.ft} ft walk</span></div>`).join('')
+      : '<div class="sub">No mapped walkway around to the rear. Check the alley ends on arrival.</div>';
+    accessSub = `<small class="statsub">${callAccess.name ? esc(callAccess.name) + ' · ' : ''}${callAccess.street ? 'front on ' + esc(callAccess.street) : ''}</small>${ways}` +
+      `<small class="statsub">Yellow lines on map: front to rear by sidewalk and alley</small>`;
   }
 
   let haz = '<div class="loading">Checking hazard and vacant buildings…</div>', hazAlert = '';
