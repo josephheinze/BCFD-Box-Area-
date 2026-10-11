@@ -954,27 +954,26 @@ function roadsAround(c) {
       'primary_link', 'secondary_link', 'tertiary_link'].includes(x.p.class) && x.p.name;
     const isAlley = x => x.p.class === 'service' && x.p.type === 'service:alley';
     const streets = roads.filter(isStreet).sort((a, b) => a.ft - b.ft);
-    // Streets out to about 700 ft, to find the side streets at each end of the row
-    let wide = [];
-    try {
-      const r2 = await fetch(`https://api.mapbox.com/v4/mapbox.mapbox-streets-v8/tilequery/${c.lng},${c.lat}.json` +
-        `?radius=220&limit=50&layers=road&geometry=linestring&dedupe=true&access_token=${MAPBOX_TOKEN}`);
-      const d2 = await r2.json();
-      if (r2.ok) wide = (d2.features || []).map(f => ({ p: f.properties || {}, c: f.geometry && f.geometry.coordinates,
-        ft: Math.round(((f.properties || {}).tilequery || {}).distance * 3.281) })).filter(x => x.c && isStreet(x));
-    } catch (e) { /* side streets are optional */ }
-    return { streets, alleys: roads.filter(isAlley).sort((a, b) => a.ft - b.ft), wide };
+    return { streets, alleys: roads.filter(isAlley).sort((a, b) => a.ft - b.ft) };
   });
   return c.roadsPromise;
 }
 
 // Walking route (sidewalks, paths, alleys) through the given points; null if none
-async function walkRoute(points) {
+async function walkRoute(points, startBearing) {
+  const brg = startBearing == null ? '' : `&bearings=${Math.round(startBearing)},60${';'.repeat(points.length - 1)}`;
   const url = `https://api.mapbox.com/directions/v5/mapbox/walking/${points.map(p => p[0] + ',' + p[1]).join(';')}` +
-    `?geometries=geojson&overview=full&access_token=${MAPBOX_TOKEN}`;
+    `?geometries=geojson&overview=full${brg}&access_token=${MAPBOX_TOKEN}`;
   const r = await fetch(url); const d = await r.json();
   if (!r.ok || !d.routes || !d.routes.length) return null;
   return { geometry: d.routes[0].geometry, ft: Math.round(d.routes[0].distance * 3.281) };
+}
+// Move from point a toward point b by up to `ft` feet (never more than 60% of the way)
+function stepToward(a, b, ft) {
+  const total = feetBetween(a, b);
+  if (!total) return a;
+  const f = Math.min(ft, total * 0.6) / total;
+  return [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f];
 }
 // Signed turn from bearing a to bearing b, -180..180
 const signedTurn = (a, b) => ((b - a + 540) % 360) - 180;
@@ -1005,21 +1004,23 @@ async function loadBuildingAndAccess(seq) {
     drawFrontBack();
     renderSheet();
     if (callAccess.front && callAccess.pt) {
-      // Side streets at each end of the row: named streets off to the left and right of the front street
-      const bf = bearing(center, callAccess.front), frontCore = streetCore(front.p.name);
-      const sides = { left: null, right: null };
-      (info.wide || []).forEach(x => {
-        if (streetCore(x.p.name) === frontCore) return;
-        const t = signedTurn(bf, bearing(center, x.c));
-        const side = t <= -35 && t >= -145 ? 'left' : t >= 35 && t <= 145 ? 'right' : null;
-        if (side && (!sides[side] || x.ft < sides[side].ft)) sides[side] = x;
-      });
-      const tries = [];
-      ['left', 'right'].forEach(k => { if (sides[k]) tries.push(walkRoute([callAccess.front, sides[k].c, callAccess.pt]).then(w => w && Object.assign(w, { via: sides[k].p.name, dir: compass(bearing(center, sides[k].c)) }))); });
-      if (!tries.length) tries.push(walkRoute([callAccess.front, callAccess.pt]).then(w => w && Object.assign(w, { via: '', dir: '' })));
-      const walks = (await Promise.all(tries.map(p => p.catch(() => null)))).filter(Boolean)
-        .filter(w => w.ft < 3000)                                 // ignore silly detours
-        .sort((a, b) => a.ft - b.ft);
+      // FRONT = the sidewalk in front of the building (Alpha side), not the middle of the street
+      callAccess.frontWalk = stepToward(callAccess.front, center, 30);
+      const toBldg = bearing(callAccess.front, center);
+      const dirs = [(toBldg + 90) % 360, (toBldg + 270) % 360];          // the two ways along the front sidewalk
+      const got = await Promise.all(dirs.map(d => walkRoute([callAccess.frontWalk, callAccess.pt], d)
+        .then(w => w && Object.assign(w, { via: '', dir: compass(d) + ' end of the row' })).catch(() => null)));
+      let walks = got.filter(Boolean).filter(w => w.ft < 3000);
+      // If both requests came back the same way, keep one
+      if (walks.length === 2 && Math.abs(walks[0].ft - walks[1].ft) < 15) {
+        const m = w => w.geometry.coordinates[Math.floor(w.geometry.coordinates.length / 2)];
+        if (feetBetween(m(walks[0]), m(walks[1])) < 40) walks = [walks[0]];
+      }
+      if (!walks.length) {
+        const w = await walkRoute([callAccess.frontWalk, callAccess.pt]).catch(() => null);
+        if (w) walks = [Object.assign(w, { via: '', dir: '' })];
+      }
+      walks.sort((x, y) => x.ft - y.ft);
       if (seq !== callSeq) return;
       callAccess.walks = walks;
       drawFrontBack();
@@ -1037,10 +1038,10 @@ function drawFrontBack() {
   const fc = { type: 'FeatureCollection', features: [] };
   if (call && callAccess && callAccess.front && callAccess.pt) {
     (callAccess.walks || []).forEach(w => fc.features.push({ type: 'Feature', properties: {}, geometry: w.geometry }));
-    fc.features.push({ type: 'Feature', properties: { label: 'FRONT' }, geometry: { type: 'Point', coordinates: callAccess.front } });
+    fc.features.push({ type: 'Feature', properties: { label: 'FRONT' }, geometry: { type: 'Point', coordinates: callAccess.frontWalk || stepToward(callAccess.front, [call.lng, call.lat], 30) } });
     fc.features.push({ type: 'Feature', properties: { label: callAccess.where === 'rear' ? 'REAR' : 'ALLEY' }, geometry: { type: 'Point', coordinates: callAccess.pt } });
   } else if (call && callAccess && callAccess.front) {
-    fc.features.push({ type: 'Feature', properties: { label: 'FRONT' }, geometry: { type: 'Point', coordinates: callAccess.front } });
+    fc.features.push({ type: 'Feature', properties: { label: 'FRONT' }, geometry: { type: 'Point', coordinates: stepToward(callAccess.front, [call.lng, call.lat], 30) } });
   }
   if (callAccess) callAccess.line = fc;
   setData('callalley', fc);
@@ -1161,7 +1162,7 @@ function renderSheet() {
     accessTxt = `${callAccess.where === 'rear' ? 'Rear alley' : callAccess.where === 'side' ? 'Side alley' : 'Alley'} ~${callAccess.ft} ft ${callAccess.dir}`;
     const ways = callAccess.walks == null ? '<div class="sub loading">Finding the ways around back…</div>'
       : callAccess.walks.length ? callAccess.walks.map((w, i) =>
-          `<div class="walk">${i === 0 ? 'Shortest' : 'Other way'}: ${w.via ? 'via ' + esc(w.via) : 'around the row'}${w.dir ? ' (' + w.dir + ')' : ''} <span class="tag">~${w.ft} ft walk</span></div>`).join('')
+          `<div class="walk">${i === 0 ? 'Shortest' : 'Other way'}: ${w.dir ? 'around the ' + esc(w.dir) : 'around the row'} <span class="tag">~${w.ft} ft walk</span></div>`).join('')
       : '<div class="sub">No mapped walkway around to the rear. Check the alley ends on arrival.</div>';
     accessSub = `<small class="statsub">${callAccess.name ? esc(callAccess.name) + ' · ' : ''}${callAccess.street ? 'front on ' + esc(callAccess.street) : ''}</small>${ways}` +
       `<small class="statsub">Yellow lines on map: front to rear by sidewalk and alley</small>`;
