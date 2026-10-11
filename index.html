@@ -1113,27 +1113,39 @@ async function loadNearHazards(seq) {
 
 function fitAll() {
   if (!call) return;
-  // Close-up centered on the building: frame A, B, C, D evenly around the address (nothing else pulls it off-center)
+  // Close-up centered on the building: frame A, B, C, D evenly around the address
   const c0 = [call.lng, call.lat];
   const b = new mapboxgl.LngLatBounds(c0, c0);
+  const facing = callAccess && callAccess.front ? bearing(callAccess.front, c0) : 0;   // A side at the bottom, C at the top
   if (callAccess && callAccess.front) {
-    const facing = bearing(callAccess.front, c0);
     // farthest of A / C, plus room so the B and D houses aren't cut off
-    let reach = Math.max(feetBetween(c0, stepToward(callAccess.front, c0, 30)), callAccess.pt ? feetBetween(c0, callAccess.pt) : 0, 45) * 1.35 + 15;
-    // widen just enough (same on every side, so the house stays centered) to keep hydrant #1 on screen
-    const h1 = Array.isArray(nearHydrants) && nearHydrants[0];
-    if (h1 && h1.ft <= 350) reach = Math.max(reach, feetBetween(c0, [h1.lng, h1.lat]) + 25);
-    // same distance out on all four sides, so the house stays in the middle
+    const reach = Math.max(feetBetween(c0, stepToward(callAccess.front, c0, 30)), callAccess.pt ? feetBetween(c0, callAccess.pt) : 0, 45) * 1.35 + 15;
     [0, 90, 180, 270].forEach(t => b.extend(offsetFeet(c0, (facing + t) % 360, reach)));
   }
-  const top = $('topbar').offsetHeight + 20;
   const wide = window.innerWidth >= 820;
-  const bottom = wide ? 40 : Math.min($('sheet').offsetHeight, window.innerHeight * 0.5) + 20;
-  const left = wide ? 420 : 40;
-  // Turn the map so you're looking at the building from the street: A side at the bottom, C at the top
-  const facing = callAccess && callAccess.front ? bearing(callAccess.front, [call.lng, call.lat]) : 0;
-  map.fitBounds(b, { padding: { top, bottom, left: Math.max(left, 20), right: 20 }, maxZoom: 18.7, duration: 700,
-                     pitch: 0, bearing: facing });
+  const padding = { top: $('topbar').offsetHeight + 20, bottom: wide ? 40 : Math.min($('sheet').offsetHeight, window.innerHeight * 0.5) + 20,
+                    left: wide ? 420 : 20, right: 20 };
+
+  // The normal close-up zoom
+  let zoom = 18.7;
+  try {
+    const cam = map.cameraForBounds(b, { padding, bearing: facing, maxZoom: 18.7 });
+    if (cam && isFinite(cam.zoom)) zoom = Math.min(cam.zoom, 18.7);
+  } catch (e) { /* keep the default */ }
+
+  // Only if hydrant #1 would fall off screen at that zoom, zoom out just enough to show it (house stays centered)
+  const h1 = Array.isArray(nearHydrants) && nearHydrants[0];
+  if (h1 && h1.ft <= 400) {
+    const d = feetBetween(c0, [h1.lng, h1.lat]), t = (bearing(c0, [h1.lng, h1.lat]) - facing) * Math.PI / 180;
+    const right = Math.abs(d * Math.sin(t)), up = Math.abs(d * Math.cos(t));          // feet across / up the screen
+    const margin = 28;                                                                 // room for the hydrant badge
+    const halfW = (window.innerWidth - padding.left - padding.right) / 2 - margin;
+    const halfH = (window.innerHeight - padding.top - padding.bottom) / 2 - margin;
+    const ftPerPx = Math.max(right / Math.max(halfW, 40), up / Math.max(halfH, 40));
+    const fitZoom = Math.log2(78271.517 * Math.cos(c0[1] * Math.PI / 180) * 3.281 / ftPerPx);
+    if (isFinite(fitZoom) && fitZoom < zoom) zoom = fitZoom;
+  }
+  map.easeTo({ center: c0, zoom, bearing: facing, pitch: 0, padding, duration: 700 });
 }
 
 // ============================================================
