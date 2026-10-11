@@ -1236,7 +1236,7 @@ function computeSides() {
   const alleyRear = callAccess.pt && callAccess.where === 'rear';
   // Default (no outline): neighbors ~one rowhouse over, C at the alley or just behind the pin
   let B = offsetFeet(center, (facing + 270) % 360, ROWHOUSE_FT), D = offsetFeet(center, right, ROWHOUSE_FT);
-  let C = callAccess.pt || offsetFeet(center, facing, 25), cLabel = callAccess.pt ? (alleyRear ? 'C' : 'Alley') : 'C';
+  let C = offsetFeet(center, facing, 25), cLabel = 'C';                // C = the back of the building
   let walkTo = callAccess.pt || null;
   const g = callAccess.fp;
   if (g) {
@@ -1259,14 +1259,8 @@ function computeSides() {
       B = at(-ROWHOUSE_FT, midB);                                    // one outline for the whole row: the houses on either side
       D = at(ROWHOUSE_FT, midB);
     }
-    // C: the alley if it's right behind the building (rowhouses); otherwise the building's rear wall
-    const alleyBack = alleyRear ? (toFt(callAccess.pt)[0] * bx[0] + toFt(callAccess.pt)[1] * bx[1]) : null;
-    const big = !isRow && (rmax - rmin) > 45;                         // apartment / commercial: C goes on the rear wall
-    if (alleyRear && alleyBack - bmax <= 120 && !big) { C = callAccess.pt; cLabel = 'C'; walkTo = callAccess.pt; }
-    else {
-      C = at(wholeRow ? 0 : (rmin + rmax) / 2, bmax + 10); cLabel = 'C';
-      walkTo = alleyRear && alleyBack >= bmax - 5 && alleyBack - bmax <= 120 ? callAccess.pt : C;   // walk to the alley if it's behind
-    }
+    // C = the back of the building: straight back from A, just past the rear wall
+    C = at(wholeRow ? 0 : (rmin + rmax) / 2, bmax + 10); cLabel = 'C'; walkTo = C;
   }
   return { A, B, C, D, cLabel, walkTo };
 }
