@@ -1159,6 +1159,7 @@ async function loadBuildingAndAccess(seq) {
                         street: front ? front.p.name : null, front: front ? front.c : null, pt: pick.a.c, walks: null };
     // The building's own outline, so B / C / D sit on its real sides (big buildings) or the neighbors (rowhouses)
     try { callAccess.fp = await callFootprint(center); } catch (e) { callAccess.fp = null; }
+    callAccess.parcel = await callParcel(center);
     if (seq !== callSeq) return;
     drawFrontBack();
     renderSheet();
@@ -1205,6 +1206,22 @@ const ROWHOUSE_FT = 22;   // how far over the B and D labels sit (about one Balt
 // The access line plus side labels: A front, B left, C rear, D right (as seen standing on the A side)
 // The city's outline of the building at the address: the building under the pin
 // (a typed address that lands just off a building uses the closest one within ~60 ft)
+// The property lot at the address (Real Property). Attached buildings can share one city outline;
+// the lot says which part of it is this address.
+function callParcel(pt) {
+  const key = pt.join(',');
+  if (call && call._parcelKey === key) return call._parcel;
+  const p = cityQuery(12, { geometry: key, geometryType: 'esriGeometryPoint', inSR: '4326', spatialRel: 'esriSpatialRelIntersects',
+      distance: '40', units: 'esriSRUnit_Foot', outFields: 'FULLADDR', returnGeometry: 'true', geometryPrecision: '7' }, VACANT_SVC)
+    .then(res => {
+      const c = (res.features || []).filter(f => f.geometry && f.geometry.rings && f.geometry.rings.length)
+        .map(f => { const g = esriToGeo(f.geometry.rings); return { g, ft: feetToPolygon(pt, g) }; }).sort((a, b) => a.ft - b.ft)[0];
+      return c ? c.g : null;
+    }).catch(() => null);
+  if (call) { call._parcelKey = key; call._parcel = p; }
+  return p;
+}
+
 async function callFootprint(pt) {
   const d = 0.0009, dLat = d * 0.77;
   const res = await cityQuery(BUILDINGS_LAYER, { geometry: [pt[0] - d, pt[1] - dLat, pt[0] + d, pt[1] + dLat].join(','),
@@ -1247,14 +1264,24 @@ function computeSides() {
     const toFt = v => [(v[0] - center[0]) * k * 364000, (v[1] - center[1]) * 364000];
     const vs = (g.type === 'Polygon' ? [g.coordinates] : g.coordinates).flatMap(p => p[0]).map(toFt);
     const rs = vs.map(v => v[0] * ax[0] + v[1] * ax[1]), bs = vs.map(v => v[0] * bx[0] + v[1] * bx[1]);
-    const rmin = Math.min(...rs), rmax = Math.max(...rs), bmin = Math.min(...bs), bmax = Math.max(...bs);
+    let rmin = Math.min(...rs), rmax = Math.max(...rs), bmin = Math.min(...bs), bmax = Math.max(...bs);
+    let onLot = false;                                                // trim to this address's lot (attached buildings share one outline)
+    if (callAccess.parcel) {
+      const P = callAccess.parcel, pv = (P.type === 'Polygon' ? [P.coordinates] : P.coordinates).flatMap(q => q[0]).map(toFt);
+      const prs = pv.map(v => v[0] * ax[0] + v[1] * ax[1]), pbs = pv.map(v => v[0] * bx[0] + v[1] * bx[1]);
+      const r0 = Math.max(rmin, Math.min(...prs)), r1 = Math.min(rmax, Math.max(...prs));
+      const b0 = Math.max(bmin, Math.min(...pbs)), b1 = Math.min(bmax, Math.max(...pbs));
+      if (r1 - r0 > 5) { rmin = r0; rmax = r1; onLot = true; }
+      if (b1 - b0 > 5) { bmin = b0; bmax = b1; }
+    }
     const at = (r, b) => [center[0] + (r * ax[0] + b * bx[0]) / (k * 364000), center[1] + (r * ax[1] + b * bx[1]) / 364000];
     const midB = (bmin + bmax) / 2;
     const isRow = callBldgInfo && /rowhouse|residential/i.test(callBldgInfo.text || '');   // "Residential (row or detached...)" counts too
-    const wholeRow = isRow && (rmax - rmin) > 45;                     // one outline drawn for the whole row
+    const wholeRow = !onLot && isRow && (rmax - rmin) > 45;                     // one outline drawn for the whole row
     if (!wholeRow) {
-      B = at(rmin - 10, midB);                                       // just off the left wall (the next house on a row)
-      D = at(rmax + 10, midB);                                       // just off the right wall
+      const off = Math.min((rmax - rmin) / 2, 15);                   // the middle of the house next door on a row
+      B = at(rmin - off, midB);
+      D = at(rmax + off, midB);
     } else {
       B = at(-ROWHOUSE_FT, midB);                                    // one outline for the whole row: the houses on either side
       D = at(ROWHOUSE_FT, midB);
@@ -1480,6 +1507,20 @@ function fitAll() {
     const cam = map.cameraForBounds(b, { padding, bearing: facing, maxZoom: 18.7 });
     if (cam && isFinite(cam.zoom)) zoom = Math.max(Math.min(cam.zoom, 18.7), 17);   // a call always opens close up
   } catch (e) { /* keep the default */ }
+
+  // Make sure A, B, C and D all show in the map area between the top bars and the bottom panel
+  if (callAccess && callAccess.sides) {
+    const s = callAccess.sides, margin = 30;
+    const halfW = (window.innerWidth - padding.left - padding.right) / 2 - margin;
+    const halfH = (window.innerHeight - padding.top - padding.bottom) / 2 - margin;
+    let ftPerPx = 0;
+    [s.A, s.B, s.C, s.D].forEach(m => {
+      const d = feetBetween(c0, m), t = (bearing(c0, m) - facing) * Math.PI / 180;
+      ftPerPx = Math.max(ftPerPx, Math.abs(d * Math.sin(t)) / Math.max(halfW, 40), Math.abs(d * Math.cos(t)) / Math.max(halfH, 40));
+    });
+    const need = ftPerPx > 0 ? Math.log2(78271.517 * Math.cos(c0[1] * Math.PI / 180) * 3.281 / ftPerPx) : 18.7;
+    if (isFinite(need)) zoom = Math.max(Math.min(zoom, need), 16.5);
+  }
 
   // Only if hydrant #1 would fall off screen at that zoom, zoom out just enough to show it (house stays centered)
   const h1 = Array.isArray(nearHydrants) && nearHydrants[0];
