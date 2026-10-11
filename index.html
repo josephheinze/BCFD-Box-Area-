@@ -96,6 +96,8 @@
   .lockrow span { color: var(--muted); font-size: 13px; }
   .lockrow button { background: #1d212a; color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; font-size: 13px; cursor: pointer; }
   .walk { font-size: 15px; font-weight: 600; margin-top: 6px; }
+  .gbtns { margin: 0 0 10px; }
+  .btns.gbtns a { background: #1e3a5f; border-color: #2563eb; font-weight: 700; }
   .statsub { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; }
   .num.bad { background: #ef4444; color: #fff; }
   .num.caution { background: var(--hydrant); color: #111; box-shadow: 0 0 0 3px #fde047; }
@@ -152,6 +154,7 @@
   <div id="suggest"></div>
   <div class="row">
     <select id="origin" aria-label="Responding from"></select>
+    <button id="view3dBtn">3D</button>
     <button id="styleBtn">Dark map</button>
   </div>
 </div>
@@ -418,6 +421,7 @@ function start() {
   setupSearch();
   $('grab').onclick = () => $('sheet').classList.toggle('collapsed');
 
+  $('view3dBtn').onclick = () => set3D(!is3D);
   $('styleBtn').onclick = () => {
     if (!window.map) return;
     styleName = styleName === 'dark' ? 'sat' : 'dark';
@@ -462,6 +466,19 @@ function start() {
   loadBoxes();
 }
 
+// ---------- 2D / 3D ----------
+let is3D = false;
+function set3D(on) {
+  is3D = on;
+  $('view3dBtn').textContent = on ? '2D' : '3D';
+  if (!window.map) return;
+  if (map.getLayer('bldg-3d')) map.setLayoutProperty('bldg-3d', 'visibility', on ? 'visible' : 'none');
+  // In 3D, look at the building from the A side
+  const facing = call && callAccess && callAccess.front ? bearing(callAccess.front, [call.lng, call.lat]) : map.getBearing();
+  map.easeTo({ pitch: on ? 60 : 0, bearing: on ? facing : 0, center: call ? [call.lng, call.lat] : map.getCenter(),
+               zoom: call ? Math.max(map.getZoom(), 17.5) : map.getZoom(), duration: 900 });
+}
+
 let toastTimer;
 function toast(msg) {
   const t = $('toast'); t.textContent = msg; t.style.display = 'block';
@@ -479,6 +496,15 @@ function addOverlays() {
   if (styleName === 'sat') map.getStyle().layers.forEach(l => {
     if (l.type === 'line' && (l['source-layer'] === 'road' || /^(road|bridge|tunnel)/.test(l.id))) { try { map.setLayoutProperty(l.id, 'visibility', 'none'); } catch (e) {} }
   });
+
+  if (map.getSource('composite')) {
+    try {
+      map.addLayer({ id: 'bldg-3d', type: 'fill-extrusion', source: 'composite', 'source-layer': 'building', minzoom: 14,
+        filter: ['==', ['get', 'extrude'], 'true'], layout: { visibility: is3D ? 'visible' : 'none' },
+        paint: { 'fill-extrusion-color': '#d6d3d1', 'fill-extrusion-opacity': 0.75,
+                 'fill-extrusion-height': ['coalesce', ['get', 'height'], 9], 'fill-extrusion-base': ['coalesce', ['get', 'min_height'], 0] } });
+    } catch (e) { console.error(e); }
+  }
 
   map.addSource('boxes', { type: 'geojson', data: boxes || empty });
   map.addSource('box-labels', { type: 'geojson', data: boxLabels() });
@@ -1086,7 +1112,9 @@ function fitAll() {
   const wide = window.innerWidth >= 820;
   const bottom = wide ? 40 : Math.min($('sheet').offsetHeight, window.innerHeight * 0.5) + 20;
   const left = wide ? 420 : 40;
-  map.fitBounds(b, { padding: { top, bottom, left, right: 40 }, maxZoom: 18.5, duration: 700 });
+  const facing = is3D && callAccess && callAccess.front ? bearing(callAccess.front, [call.lng, call.lat]) : map.getBearing();
+  map.fitBounds(b, { padding: { top, bottom, left, right: 40 }, maxZoom: 18.5, duration: 700,
+                     pitch: is3D ? 60 : 0, bearing: is3D ? facing : 0 });
 }
 
 // ============================================================
@@ -1118,6 +1146,17 @@ function hydrantHTML(p) {
   return `<b>${esc(t.loc)}</b>${t.extra ? `<br>${esc(t.extra)}` : ''}` +
     `${t.main ? `<br>${esc(t.main)}` : ''}${warn.length ? `<br><b style="color:${t.bad.length ? '#f87171' : '#fbbf24'}">⚠ ${esc(warn.join(' · '))}</b>` : ''}` +
     `${t.id ? `<br><span style="color:#9aa3b2">ID ${esc(t.id)}</span>` : ''}`;
+}
+// Street View standing on the A side, looking at the building
+function streetViewUrl() {
+  const at = callAccess && callAccess.front ? callAccess.front : [call.lng, call.lat];
+  const head = callAccess && callAccess.front ? Math.round(bearing(callAccess.front, [call.lng, call.lat])) : 0;
+  return `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${at[1].toFixed(6)},${at[0].toFixed(6)}&heading=${head}&pitch=10&fov=80`;
+}
+// Google Earth, tilted 3D view of the address from the A side
+function earthUrl() {
+  const head = callAccess && callAccess.front ? Math.round(bearing(callAccess.front, [call.lng, call.lat])) : 0;
+  return `https://earth.google.com/web/@${call.lat.toFixed(6)},${call.lng.toFixed(6)},30a,180d,35y,${head}h,60t,0r`;
 }
 function fmtDate(v) { const d = new Date(Number(v)); return isFinite(d) && v ? d.toLocaleDateString() : ''; }
 function xrayHTML(p) {
@@ -1217,6 +1256,10 @@ function renderSheet() {
   $('sheetBody').innerHTML = `
     <div class="addr">${esc(label)}</div>
     <div class="lockrow"><span>🔒 Locked: map taps won't move it</span><button id="clearCall">Clear call</button></div>
+    <div class="btns gbtns">
+      <a href="${streetViewUrl()}" target="_blank" rel="noopener">Street View</a>
+      <a href="${earthUrl()}" target="_blank" rel="noopener">Google Earth</a>
+    </div>
     ${hazAlert}
     <div class="stats">
       <div class="stat wide boxcard"><span>Box · first due house</span>
