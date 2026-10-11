@@ -1151,36 +1151,106 @@ function drawFrontBack() {
 }
 
 // ---------- Building description (Maryland property records, the same data SDAT uses) ----------
-const MD_PROPERTY = 'https://geodata.md.gov/imap/rest/services/PlanningCadastre/MD_PropertyData/MapServer';
+// The state publishes the same data on two servers; try both
+const MD_PROPERTY_SOURCES = ['https://mdgeodata.md.gov/imap/rest/services/PlanningCadastre/MD_PropertyData/MapServer',
+                             'https://geodata.md.gov/imap/rest/services/PlanningCadastre/MD_PropertyData/MapServer'];
 const BLDG_FIELDS = 'ADDRESS,STRTNUM,STRTNAM,DESCSTYL,STRUSTYL,DESCBLDG,STRUBLDG,DESCCNST,BLDG_STORY,BLDG_UNITS,DESCLU,DESCCIUSE,YEARBLT';
 
 async function loadBuildingInfo(seq) {
   const pt = [call.lng, call.lat];
   const near = { geometry: `${pt[0]},${pt[1]}`, geometryType: 'esriGeometryPoint', inSR: '4326',
                  spatialRel: 'esriSpatialRelIntersects', units: 'esriSRUnit_Meter', outFields: BLDG_FIELDS, returnGeometry: 'true' };
+  const num = ((call.label || '').match(/^\s*(\d+)/) || [])[1];
+  const street = streetCore(call.label || '').split(' ')[0];
+  let stateErr = null;
+  // 1) State property records (style, stories, construction, units)
+  for (const src of MD_PROPERTY_SOURCES) {
+    try {
+      let recs = [];
+      if (num && street) {
+        const d = await cityQuery(0, Object.assign({}, near, { distance: '300',
+          where: `ADDRESS LIKE '${num} %${street.toUpperCase().replace(/'/g, "''")}%'` }), src);
+        recs = d.features || [];
+      }
+      if (!recs.length) {
+        const d = await cityQuery(0, Object.assign({}, near, { distance: '35', where: '1=1' }), src);
+        recs = (d.features || []).filter(f => f.geometry)
+          .sort((a, b) => feetBetween(pt, [a.geometry.x, a.geometry.y]) - feetBetween(pt, [b.geometry.x, b.geometry.y]));
+      }
+      if (seq !== callSeq) return;
+      if (recs.length) { callBldgInfo = describeBuilding(recs[0].attributes || {}); renderSheet(); return; }
+      stateErr = stateErr || 'no record';
+      break;                                   // server answered but had nothing; don't ask the other copy
+    } catch (e) { stateErr = e.message || String(e); }
+  }
+  // 2) Backup: build it from the city's own data (works where the state's servers refuse the app)
   try {
-    let recs = [];
-    // 1) the record for this exact address (house number + street), close to the pin
-    const num = ((call.label || '').match(/^\s*(\d+)/) || [])[1];
-    const street = streetCore(call.label || '').split(' ')[0];
-    if (num && street) {
-      const d = await cityQuery(0, Object.assign({}, near, { distance: '300',
-        where: `ADDRESS LIKE '${num} %${street.toUpperCase().replace(/'/g, "''")}%'` }), MD_PROPERTY);
-      recs = d.features || [];
-    }
-    // 2) otherwise the property record nearest the pin
-    if (!recs.length) {
-      const d = await cityQuery(0, Object.assign({}, near, { distance: '35', where: '1=1' }), MD_PROPERTY);
-      recs = (d.features || []).filter(f => f.geometry)
-        .sort((a, b) => feetBetween(pt, [a.geometry.x, a.geometry.y]) - feetBetween(pt, [b.geometry.x, b.geometry.y]));
-    }
+    const info = await describeFromCity(pt);
     if (seq !== callSeq) return;
-    callBldgInfo = recs.length ? describeBuilding(recs[0].attributes || {}) : { none: true };
+    callBldgInfo = info || { none: true };
   } catch (e) {
     if (seq !== callSeq) return;
-    callBldgInfo = { error: e.message || String(e) };
+    callBldgInfo = { error: stateErr ? `state: ${stateErr}; city: ${e.message || e}` : (e.message || String(e)) };
   }
   renderSheet();
+}
+
+// City data: stories from building outlines, middle/end of group from shared walls, units from Real Property
+async function describeFromCity(pt) {
+  const d = 0.0006, dLat = d * 0.77;
+  const [fp, rp] = await Promise.all([
+    cityQuery(BUILDINGS_LAYER, { geometry: [pt[0] - d, pt[1] - dLat, pt[0] + d, pt[1] + dLat].join(','), geometryType: 'esriGeometryEnvelope',
+      inSR: '4326', spatialRel: 'esriSpatialRelIntersects', outFields: 'NUMSTORIES,BLDGHEIGHT', returnGeometry: 'true', geometryPrecision: '7' }),
+    cityQuery(12, { geometry: `${pt[0]},${pt[1]}`, geometryType: 'esriGeometryPoint', inSR: '4326', spatialRel: 'esriSpatialRelIntersects',
+      outFields: 'FULLADDR,PROPDESC,DWELUNIT,EFF_UNIT,ROOMUNIT,USEGROUP,YEAR_BUILD,STRUCTAREA', returnGeometry: 'false' }, VACANT_SVC)
+      .catch(() => ({ features: [] }))
+  ]);
+  const bldgs = (fp.features || []).filter(f => f.geometry && f.geometry.rings && f.geometry.rings.length)
+    .map(f => ({ a: f.attributes || {}, g: esriToGeo(f.geometry.rings) }));
+  const prop = ((rp.features || [])[0] || {}).attributes || {};
+  if (!bldgs.length && !Object.keys(prop).length) return null;
+  bldgs.forEach(b => b.ft = feetToPolygon(pt, b.g));
+  bldgs.sort((x, y) => x.ft - y.ft);
+  const me = bldgs[0] && bldgs[0].ft <= 60 ? bldgs[0] : null;
+
+  // stories
+  let stories = me ? Number(me.a.NUMSTORIES) : 0;
+  if (!(stories > 0) && me && Number(me.a.BLDGHEIGHT) > 0) stories = Math.max(1, Math.round(Number(me.a.BLDGHEIGHT) / 10));
+  const st = stories > 0 ? `${stories}-story ` : '';
+  const units = Number(prop.DWELUNIT) || 0;
+  const desc = clean(prop.PROPDESC).toUpperCase();
+
+  // row position
+  let pos = null;
+  if (me) {
+    const ringsOf = g => (g.type === 'Polygon' ? [g.coordinates] : g.coordinates).map(p => p[0]);
+    const touches = (g1, g2) => ringsOf(g1).some(r => r.some(v => feetToPolygon(v, g2) < 2));
+    const neighbors = bldgs.filter(b => b !== me && (touches(me.g, b.g) || touches(b.g, me.g))).length;
+    // Is this outline one whole row (one long block)? Then judge by where the address sits along it.
+    const k = Math.cos(pt[1] * Math.PI / 180), vs = ringsOf(me.g)[0].map(v => [(v[0] - pt[0]) * k * 364000, (v[1] - pt[1]) * 364000]);
+    const mx = vs.reduce((s, v) => s + v[0], 0) / vs.length, my = vs.reduce((s, v) => s + v[1], 0) / vs.length;
+    let sxx = 0, syy = 0, sxy = 0; vs.forEach(([x, y]) => { sxx += (x - mx) ** 2; syy += (y - my) ** 2; sxy += (x - mx) * (y - my); });
+    const ang = 0.5 * Math.atan2(2 * sxy, sxx - syy), ux = Math.cos(ang), uy = Math.sin(ang);
+    const along = vs.map(([x, y]) => x * ux + y * uy), across = vs.map(([x, y]) => -x * uy + y * ux);
+    const L = Math.max(...along) - Math.min(...along), W = Math.max(...across) - Math.min(...across);
+    if (L > 90 && L > 2.2 * W) {
+      const fromEnd = Math.min(0 - Math.min(...along), Math.max(...along) - 0);   // the address is at 0
+      pos = fromEnd < 25 ? 'end' : 'middle';
+    } else {
+      pos = neighbors >= 2 ? 'middle' : neighbors === 1 ? 'end' : 'detached';
+    }
+  }
+  let text;
+  if (units >= 3 || /APT|APART/.test(desc)) text = `${st}apartment building${units ? ` · ${units} units` : ''}`;
+  else if (/COMM|STORE|OFFICE|RETAIL|INDUST|WAREH|CHURCH|SCHOOL/.test(desc)) text = `Commercial: ${clean(prop.PROPDESC)}`;
+  else if (pos === 'middle') text = `${st}middle-of-group rowhouse`;
+  else if (pos === 'end') text = `${st}end-of-group rowhouse`;
+  else if (pos === 'detached') text = `${st}single-family (detached)`;
+  else text = `${st}building`;
+  const yr = Number(prop.YEAR_BUILD);
+  const detail = [clean(prop.FULLADDR), yr > 1700 ? `built ${yr}` : '', clean(prop.PROPDESC), 'from city records · construction not listed']
+    .filter(Boolean).join(' · ');
+  return { text: text.charAt(0).toUpperCase() + text.slice(1), detail };
 }
 
 function describeBuilding(a) {
