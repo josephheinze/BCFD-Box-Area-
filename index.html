@@ -172,7 +172,7 @@
 <div id="sheet">
   <div id="grab" aria-label="Show or hide details"></div>
   <div id="sheetBody">
-    <div class="hint">Search a call address, or tap anywhere on the map to drop a call pin.</div>
+    <div class="hint">Search a call address, or tap the building on the map.</div>
   </div>
 </div>
 
@@ -433,7 +433,7 @@ function start() {
   try {
     window.map = new mapboxgl.Map({
       container: 'map', style: STYLES[styleName],
-      center: [DEFAULT_HOUSE.lng, DEFAULT_HOUSE.lat], zoom: 13.5, attributionControl: true
+      center: [DEFAULT_HOUSE.lng, DEFAULT_HOUSE.lat - 0.00029], zoom: 17.6,   // close-up on the firehouse, North Ave in view attributionControl: true
     });
   } catch (e) {
     showBanner("<strong>The map couldn't start on this device.</strong> " + esc(e.message));
@@ -924,7 +924,7 @@ function clearCall() {
   hydMarkers.forEach(m => m.remove()); hydMarkers = [];
   setData('route', { type: 'FeatureCollection', features: [] });
   refreshBoxFilters();
-  $('sheetBody').innerHTML = '<div class="hint">Search a call address, or tap anywhere on the map to drop a call pin.</div>';
+  $('sheetBody').innerHTML = '<div class="hint">Search a call address, or tap the building on the map.</div>';
 }
 
 async function runRoute() {
