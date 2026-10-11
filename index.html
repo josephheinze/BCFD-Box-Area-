@@ -458,13 +458,30 @@ function start() {
     const tapLayers = ['area-hydrants', 'xray', 'vacant'].filter(l => map.getLayer(l));
     if (tapLayers.length && map.queryRenderedFeatures(e.point, { layers: tapLayers }).length) return;
     if (call) { toast('Call address is locked. Tap ✕ or "Clear call" to pick a new spot.'); return; }
-    setCall({ lng: e.lngLat.lng, lat: e.lngLat.lat, label: null });
+    pickBuildingAt([e.lngLat.lng, e.lngLat.lat]);
   });
   map.on('moveend', debounce(loadAreaHydrants, 400));
   map.on('moveend', debounce(loadAreaHazards, 450));
 
   loadStations();
   loadBoxes();
+}
+
+// Map taps only count on a building (the dwelling itself), never the road, sidewalk or yard
+let tapBusy = false;
+async function pickBuildingAt(p) {
+  if (tapBusy) return;
+  tapBusy = true;
+  let onBldg = true;
+  try {
+    const r = await cityQuery(BUILDINGS_LAYER, { geometry: `${p[0]},${p[1]}`, geometryType: 'esriGeometryPoint', inSR: '4326',
+      spatialRel: 'esriSpatialRelIntersects', outFields: 'OBJECTID', returnGeometry: 'false' });
+    onBldg = (r.features || []).length > 0;
+  } catch (err) { onBldg = true; }          // city building data unreachable: don't block the tap
+  tapBusy = false;
+  if (call) return;                          // a search set the call while we were checking
+  if (!onBldg) { toast('Tap on the building itself, not the road or sidewalk.'); return; }
+  setCall({ lng: p[0], lat: p[1], label: null });
 }
 
 let toastTimer;
@@ -1136,15 +1153,16 @@ function offsetFeet(p, deg, ft) {
 const ROWHOUSE_FT = 22;   // how far over the B and D labels sit (about one Baltimore rowhouse width)
 
 // The access line plus side labels: A front, B left, C rear, D right (as seen standing on the A side)
-// The city's outline of the building at the address (the one under the pin, or the closest within ~60 ft)
+// The city's outline of the building at the address: the building under the pin
+// (a typed address that lands just off a building uses the closest one within ~60 ft)
 async function callFootprint(pt) {
   const d = 0.0009, dLat = d * 0.77;
   const res = await cityQuery(BUILDINGS_LAYER, { geometry: [pt[0] - d, pt[1] - dLat, pt[0] + d, pt[1] + dLat].join(','),
     geometryType: 'esriGeometryEnvelope', inSR: '4326', spatialRel: 'esriSpatialRelIntersects', outFields: 'OBJECTID',
     returnGeometry: 'true', geometryPrecision: '7' });
-  const c = (res.features || []).filter(f => f.geometry && f.geometry.rings && f.geometry.rings.length)
-    .map(f => { const g = esriToGeo(f.geometry.rings); return { g, ft: feetToPolygon(pt, g) }; })
-    .sort((a, b) => a.ft - b.ft)[0];
+  const all = (res.features || []).filter(f => f.geometry && f.geometry.rings && f.geometry.rings.length)
+    .map(f => { const g = esriToGeo(f.geometry.rings); return { g, ft: feetToPolygon(pt, g) }; });
+  const c = all.sort((a, b) => a.ft - b.ft)[0];
   return c && c.ft <= 60 ? c.g : null;
 }
 
@@ -1187,6 +1205,9 @@ function computeSides() {
     if (!wholeRow) {
       B = at(rmin - 10, midB);                                       // just off the left wall (the next house on a row)
       D = at(rmax + 10, midB);                                       // just off the right wall
+    } else {
+      B = at(-ROWHOUSE_FT, midB);                                    // one outline for the whole row: the houses on either side
+      D = at(ROWHOUSE_FT, midB);
     }
     // C: the alley if it's right behind the building (rowhouses); otherwise the building's rear wall
     const alleyBack = alleyRear ? (toFt(callAccess.pt)[0] * bx[0] + toFt(callAccess.pt)[1] * bx[1]) : null;
@@ -1288,7 +1309,7 @@ async function describeFromCity(pt, inPt) {
   if (!bldgs.length && !Object.keys(prop).length) return null;
   bldgs.forEach(b => b.ft = feetToPolygon(pt, b.g));
   bldgs.sort((x, y) => x.ft - y.ft);
-  const me = bldgs[0] && bldgs[0].ft <= 60 ? bldgs[0] : null;
+  const me = bldgs.find(b => inPt !== pt && pointInGeo(inPt, b.g)) || (bldgs[0] && bldgs[0].ft <= 60 ? bldgs[0] : null);
 
   // stories
   let stories = me ? Number(me.a.NUMSTORIES) : 0;
