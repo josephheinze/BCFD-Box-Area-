@@ -260,6 +260,13 @@ function fixQuarters(engine, name) {
   const rank = u => /^E-/i.test(u) ? 0 : /^T-/i.test(u) ? 1 : 2;
   return units.map((u, i) => [u, i]).sort((a, b) => rank(a[0]) - rank(b[0]) || a[1] - b[1]).map(x => x[0]).join(' ');
 }
+// Current medic (M) vs ambulance (A) units, from the department's unit list.
+// The city's map data can be behind, so each M-/A- unit gets the letter from this list.
+const UNIT_LETTER = { 1: 'M', 2: 'M', 3: 'A', 4: 'M', 5: 'M', 6: 'M', 7: 'M', 8: 'A', 9: 'M', 10: 'M', 11: 'M', 12: 'M', 13: 'M',
+  14: 'M', 15: 'M', 16: 'M', 17: 'M', 18: 'M', 19: 'A', 20: 'A', 21: 'M', 22: 'A', 23: 'A', 24: 'A', 25: 'A', 26: 'A', 27: 'A', 28: 'A', 30: 'A' };
+function fixMedics(name) {
+  return name.replace(/\b[MA]-?(\d+)\b/g, (u, n) => UNIT_LETTER[n] ? UNIT_LETTER[n] + '-' + n : u);
+}
 // "E-46 T-27 A-28" -> "Engine 46 & Truck 27" (same style the city uses for first-due houses)
 function houseLabel(name) {
   const e = (name.match(/\bE-?(\d+)/i) || [])[1];
@@ -267,7 +274,7 @@ function houseLabel(name) {
   return (e ? ['Engine ' + e] : []).concat(trucks).join(' & ') || name;
 }
 
-const DEFAULT_HOUSE = { id: 'E-20', name: 'E-20 T-18 M-8', address: '3130 W. North Ave 21216',
+const DEFAULT_HOUSE = { id: 'E-20', name: 'E-20 T-18 A-8', address: '3130 W. North Ave 21216',
                         lng: -76.670566868816607, lat: 39.309237721872378 };
 // Fire Dept hazard buildings (CODE-X / X-RAY / UNSAFE) from the 911-CAD system, and DHCD open vacant building notices
 const XRAY_SVC = 'https://baltegis.baltimorecity.gov/mapping/rest/services/911/Fire_CODEX_XRAY_UNSAFE_Building_ALT/MapServer';
@@ -344,7 +351,7 @@ function labelPoint(geom) {
   });
   return best || polys[0][0][0];
 }
-// "E-20 T-18 M-8" -> "20"
+// "E-20 T-18 A-8" -> "20"
 function engineNumber(name) { const m = /\bE-?\s*(\d+)/i.exec(name || ''); return m ? m[1] : null; }
 // Compass bearing (degrees) from a to b
 function bearing(a, b) {
@@ -679,7 +686,7 @@ async function loadStations() {
       const raw = clean(f.attributes.NAME).replace(/\s+/g, ' ');
       const rawEngine = engineNumber(raw);
       if (!rawEngine) return null;                       // skip non-firehouse sites (fireboat, etc.)
-      const name = fixQuarters(rawEngine, raw);
+      const name = fixMedics(fixQuarters(rawEngine, raw));
       const engine = engineNumber(name);                 // null if the engine moved out
       const id = engine ? 'E-' + engine : (name.split(' ')[0] || 'Q-' + rawEngine);
       const sortKey = Number(engine || (name.match(/\d+/) || [999])[0]);
