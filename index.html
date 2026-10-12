@@ -1820,7 +1820,7 @@ async function setOccupied(p, on) {
 
 function vacantHTML(p) {
   const occ = occDate(p);
-  if (occ) return `<b>Marked OCCUPIED by you ${esc(occ)}</b><br>${esc(clean(p.Address))}<br><span style="color:#9aa3b2">City still lists a vacant notice${clean(p.NoticeNum) ? ' · #' + esc(clean(p.NoticeNum)) : ''}</span>`;
+  if (occ) return `<b>Marked OCCUPIED by user ${esc(occ)}</b><br>${esc(clean(p.Address))}<br><span style="color:#9aa3b2">City still lists a vacant notice${clean(p.NoticeNum) ? ' · #' + esc(clean(p.NoticeNum)) : ''}</span>`;
   return `<b>Vacant building notice</b><br>${esc(clean(p.Address))}` +
     `${fmtDate(p.DateNotice) ? `<br><span style="color:#9aa3b2">Notice ${fmtDate(p.DateNotice)}${clean(p.NoticeNum) ? ' · #' + esc(clean(p.NoticeNum)) : ''}</span>` : ''}`;
 }
@@ -1942,7 +1942,7 @@ function renderSheet() {
           nearVacant.slice(0, 5).map((h, i) => {
             const occ = occDate(h.p);
             return occ
-              ? `<div class="sub"><span class="vdot occ">O</span> ${esc(clean(h.p.Address))} <span class="tag">${Math.round(h.ft)} ft</span><br><span class="occtxt">OCCUPIED</span> (marked by you ${esc(occ)}; city still lists vacant)<button class="occbtn" data-occ="${i}" data-on="0">Undo</button></div>`
+              ? `<div class="sub"><span class="vdot occ">O</span> ${esc(clean(h.p.Address))} <span class="tag">${Math.round(h.ft)} ft</span><br><span class="occtxt">OCCUPIED</span> (marked by user ${esc(occ)}; city still lists vacant)<button class="occbtn" data-occ="${i}" data-on="0">Undo</button></div>`
               : `<div class="sub"><span class="vdot">V</span> ${esc(clean(h.p.Address))} <span class="tag">${Math.round(h.ft)} ft</span><button class="occbtn" data-occ="${i}" data-on="1">Mark occupied</button></div>`;
           }).join('')
         : '<div class="hint">No open vacant building notices within 300 ft.</div>');
@@ -1979,7 +1979,7 @@ function renderSheet() {
     <h3>Rear / alley access</h3>
     <div class="stat wide"><b>${accessTxt}</b>${accessSub}</div>
     <h3>Code X-Ray and vacant buildings</h3>
-    <div style="font-size:12px;color:var(--muted);margin:-2px 0 8px;line-height:1.7"><span style="display:inline-grid;place-items:center;width:14px;height:14px;border-radius:50%;background:#e11d48;color:#fff;font-size:9px;font-weight:800;border:1px solid #fff;margin-right:3px;vertical-align:-2px">X</span>Red: Code X / Code X-Ray &nbsp; <span style="display:inline-grid;place-items:center;width:14px;height:14px;border-radius:50%;background:#e11d48;color:#fff;font-size:9px;font-weight:800;border:1px solid #fff;margin-right:3px;vertical-align:-2px">D</span>Red: dangerous condition &nbsp; <span style="display:inline-grid;place-items:center;width:14px;height:14px;border-radius:50%;background:#16a34a;color:#fff;font-size:9px;font-weight:800;border:1px solid #fff;margin-right:3px;vertical-align:-2px">V</span>Green: vacant building &nbsp; <span style="display:inline-grid;place-items:center;width:14px;height:14px;border-radius:50%;background:#6b7280;color:#fff;font-size:9px;font-weight:800;border:1px solid #fff;margin-right:3px;vertical-align:-2px">O</span>Gray: marked occupied by you</div>
+    <div style="font-size:12px;color:var(--muted);margin:-2px 0 8px;line-height:1.7"><span style="display:inline-grid;place-items:center;width:14px;height:14px;border-radius:50%;background:#e11d48;color:#fff;font-size:9px;font-weight:800;border:1px solid #fff;margin-right:3px;vertical-align:-2px">X</span>Red: Code X / Code X-Ray &nbsp; <span style="display:inline-grid;place-items:center;width:14px;height:14px;border-radius:50%;background:#e11d48;color:#fff;font-size:9px;font-weight:800;border:1px solid #fff;margin-right:3px;vertical-align:-2px">D</span>Red: dangerous condition &nbsp; <span style="display:inline-grid;place-items:center;width:14px;height:14px;border-radius:50%;background:#16a34a;color:#fff;font-size:9px;font-weight:800;border:1px solid #fff;margin-right:3px;vertical-align:-2px">V</span>Green: vacant building &nbsp; <span style="display:inline-grid;place-items:center;width:14px;height:14px;border-radius:50%;background:#6b7280;color:#fff;font-size:9px;font-weight:800;border:1px solid #fff;margin-right:3px;vertical-align:-2px">O</span>Gray: marked occupied by user</div>
     ${haz}
     <p class="fine">Reference and study tool. Drive times are normal-traffic estimates, and box lines and hydrants come from Baltimore City's public 911-CAD map data. Always go by dispatch and your unit's terminal. Unofficial app, not a Baltimore City Fire Department product. © 2026 Joseph Heinze. All rights reserved.</p>`;
 
