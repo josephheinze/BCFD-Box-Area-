@@ -95,9 +95,10 @@
   .stat b { font-size: 16px; }
   .stat.wide { grid-column: 1 / -1; }
   .stat.box b { font-size: 24px; color: var(--mine); }
-  .boxrow { display: flex; align-items: center; gap: 14px; margin-top: 2px; }
-  .stat .boxnum { font-size: 30px; color: var(--mine); line-height: 1.1; white-space: nowrap; }
-  .fd { font-size: 16px; font-weight: 700; line-height: 1.25; display: flex; flex-direction: column; gap: 4px; }
+  .stat.boxcard { padding: 5px 10px; }
+  .boxrow { display: flex; align-items: center; gap: 10px; margin-top: 0; }
+  .stat .boxnum { font-size: 22px; color: var(--mine); line-height: 1.1; white-space: nowrap; }
+  .fd { font-size: 15px; font-weight: 700; line-height: 1.2; display: flex; flex-direction: column; gap: 4px; }
   .stat .tag { width: fit-content; }
   #toast { position: fixed; left: 50%; transform: translateX(-50%); top: calc(env(safe-area-inset-top) + 120px); z-index: 25;
     background: #111827; border: 1px solid #4b5563; color: #fff; padding: 10px 14px; border-radius: 10px; font-size: 14px;
@@ -1828,7 +1829,6 @@ function renderSheet() {
   const label = call.label || `${call.lat.toFixed(5)}, ${call.lng.toFixed(5)}`;
   const boxTxt = callBox ? callBox.box : (boxes ? 'Outside city boxes' : '<span class="loading">loading…</span>');
   const house = callBox ? callBox.house : (boxes ? '—' : '<span class="loading">loading…</span>');
-  const mineTag = callBox && myEngine() && callBox.engine === myEngine() ? ' <span class="tag" style="background:#78350f;color:#fde68a">your box</span>' : '';
 
   let routeTxt = '<span class="loading">routing…</span>';
   if (!o) routeTxt = 'Waiting for GPS…';
@@ -1923,7 +1923,7 @@ function renderSheet() {
     ${hazAlert}
     <div class="stats">
       <div class="stat wide boxcard"><span>Box · first due house</span>
-        <div class="boxrow"><b class="boxnum">${boxTxt}</b><div class="fd">${house}${mineTag}</div></div></div>
+        <div class="boxrow"><b class="boxnum">${boxTxt}</b><div class="fd">${house}</div></div></div>
       <div class="stat wide"><span>Building</span><b>${bldgInfoTxt}</b>${bldgInfoSub}</div>
       <div class="stat wide"><span>Miles and estimated time from ${esc(o ? o.name : '…')}</span><b>${routeTxt}</b></div>
     </div>
