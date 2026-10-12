@@ -447,6 +447,11 @@ if (typeof mapboxgl === 'undefined') {
   start();
 }
 
+// Start over the firehouse last chosen in the "From" bar (E-20 until one is picked)
+function startCenter() {
+  const v = (store('originPos') || '').split(',').map(Number);
+  return v.length === 2 && v.every(isFinite) ? [v[0], v[1] - 0.00012] : [DEFAULT_HOUSE.lng, DEFAULT_HOUSE.lat - 0.00012];
+}
 function start() {
   mapboxgl.accessToken = MAPBOX_TOKEN;
 
@@ -465,7 +470,7 @@ function start() {
   try {
     window.map = new mapboxgl.Map({
       container: 'map', style: STYLES[styleName],
-      center: [DEFAULT_HOUSE.lng, DEFAULT_HOUSE.lat - 0.00012], zoom: 17.15, attributionControl: true   // close-up on the firehouse
+      center: startCenter(), zoom: 17.15, attributionControl: true   // close-up on the firehouse
     });
   } catch (e) {
     showBanner("<strong>The map couldn't start on this device.</strong> " + esc(e.message));
@@ -844,6 +849,7 @@ function setupOrigin() {
     // move the map over the firehouse just picked (same close-up as the opening view)
     const s = stations.find(x => x.id === $('origin').value);
     if (s && window.map) map.flyTo({ center: [s.lng, s.lat - 0.00012], zoom: 17.15 });
+    if (s) store('originPos', s.lng + ',' + s.lat);
   };
 }
 function fillOrigin() {
@@ -854,6 +860,9 @@ function fillOrigin() {
   $('origin').value = [...$('origin').options].some(o => o.value === saved) ? saved : (stations[0] || {}).id;
   refreshBoxFilters();
   if ($('origin').value === 'gps') getGps();
+  // open the map over the firehouse chosen in the "From" bar (it's remembered between visits)
+  const s = stations.find(x => x.id === $('origin').value);
+  if (s && !call && window.map) { map.jumpTo({ center: [s.lng, s.lat - 0.00012], zoom: 17.15 }); store('originPos', s.lng + ',' + s.lat); }
 }
 function currentOrigin() {
   const v = $('origin').value;
