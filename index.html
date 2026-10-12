@@ -983,7 +983,8 @@ async function tapLabel(pt) {
         if (!recs.length) return mapLabel;
         const parts = buildingParts(fp);
         const onBldg = r => parts.some(g => feetToPolygon(r.q, g) < 10) ? 0 : 1;   // a record on this building (any piece) comes first
-        recs.sort((a, b) => onBldg(a) - onBldg(b) || Math.abs(a.n - num) - Math.abs(b.n - num) || feetBetween(p, a.q) - feetBetween(p, b.q));
+        const near = r => parts.length ? Math.min(...parts.map(g => feetToPolygon(r.q, g))) : feetBetween(p, r.q);   // how close to the tapped building
+        recs.sort((a, b) => onBldg(a) - onBldg(b) || near(a) - near(b) || Math.abs(a.n - num) - Math.abs(b.n - num));
         return recs[0].addr.toLowerCase().replace(/\b([a-z])/g, c => c.toUpperCase());
       } catch (e) { /* try the other copy */ }
     }
