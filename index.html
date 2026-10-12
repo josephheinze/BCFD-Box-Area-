@@ -1944,7 +1944,7 @@ function renderSheet() {
             const occ = occDate(h.p);
             return occ
               ? `<div class="sub"><span class="vdot occ">O</span> ${esc(clean(h.p.Address))} <span class="tag">${Math.round(h.ft)} ft</span><br><span class="occtxt">OCCUPIED</span> (marked by user ${esc(occ)}; city still lists vacant)<button class="occbtn" data-occ="${i}" data-on="0">Undo</button></div>`
-              : `<div class="sub"><span class="vdot">V</span> ${esc(clean(h.p.Address))} <span class="tag">${Math.round(h.ft)} ft</span><button class="occbtn occyes" data-occ="${i}" data-on="1">Return to use</button></div>`;
+              : `<div class="sub"><span class="vdot">V</span> ${esc(clean(h.p.Address))} <span class="tag">${Math.round(h.ft)} ft</span><button class="occbtn occyes" data-occ="${i}" data-on="1">Return to occupied</button></div>`;
           }).join('')
         : '<div class="hint">No open vacant building notices within 300 ft.</div>');
     }
