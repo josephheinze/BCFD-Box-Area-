@@ -559,7 +559,7 @@ function addOverlays() {
     paint: { 'text-color': '#fff' } });
   map.addLayer({ id: 'xray', type: 'circle', source: 'xray', minzoom: 14,
     paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 14, 3.5, 18, 7],
-             'circle-color': ['case', ['any', ['==', ['upcase', ['to-string', ['get', 'szType']]], 'DNG'], ['in', 'UNSAFE', ['upcase', ['to-string', ['get', 'szType']]]], ['in', 'DANGER', ['upcase', ['to-string', ['get', 'szType']]]]], '#0ea5e9', '#e11d48'],   // purple = unsafe / dangerous condition
+             'circle-color': ['case', ['any', ['==', ['upcase', ['to-string', ['get', 'szType']]], 'DNG'], ['in', 'UNSAFE', ['upcase', ['to-string', ['get', 'szType']]]], ['in', 'DANGER', ['upcase', ['to-string', ['get', 'szType']]]]], '#0284c7', '#e11d48'],   // purple = unsafe / dangerous condition
              'circle-stroke-color': '#fff', 'circle-stroke-width': 1.5 } });
   map.addLayer({ id: 'xray-x', type: 'symbol', source: 'xray', minzoom: 15,
     layout: { 'text-field': ['case', ['any', ['==', ['upcase', ['to-string', ['get', 'szType']]], 'DNG'], ['in', 'UNSAFE', ['upcase', ['to-string', ['get', 'szType']]]], ['in', 'DANGER', ['upcase', ['to-string', ['get', 'szType']]]]], 'D', 'X'], 'text-size': ['interpolate', ['linear'], ['zoom'], 15, 7, 18, 9], 'text-font': ['DIN Pro Bold', 'Arial Unicode MS Bold'], 'text-allow-overlap': true, 'text-ignore-placement': true },
@@ -1731,7 +1731,7 @@ function renderSheet() {
       parts.push(nearXray.length ? nearXray.map(h => {
         const t = clean(h.p.szType) || 'Hazard', unsafe = /^DNG$|UNSAFE|DANGER/i.test(t);   // DNG = dangerous condition
         const notes = clean(h.p.szText);
-        return `<div class="hyd"><div class="num" style="background:${unsafe ? '#0ea5e9' : '#e11d48'};color:#fff">${unsafe ? 'D' : 'X'}</div><div>
+        return `<div class="hyd"><div class="num" style="background:${unsafe ? '#0284c7' : '#e11d48'};color:#fff">${unsafe ? 'D' : 'X'}</div><div>
           <div class="main">${esc(clean(h.p.szLocation) || [h.p.nHouseNum, h.p.szStreet].filter(Boolean).join(' '))} <span class="tag" style="background:#4c0519;color:#fda4af">${esc(t)}</span><span class="tag">${Math.round(h.ft)} ft</span></div>
           ${notes ? `<div class="sub">${esc(notes.length > 140 ? notes.slice(0, 140) + '…' : notes)}</div>` : ''}</div></div>`;
       }).join('') : '<div class="hint">No Code X-Ray, Code X or Unsafe buildings within 600 ft.</div>');
@@ -1773,7 +1773,7 @@ function renderSheet() {
     <h3>Rear / alley access</h3>
     <div class="stat wide"><b>${accessTxt}</b>${accessSub}</div>
     <h3>Code X-Ray and vacant buildings</h3>
-    <div style="font-size:12px;color:var(--muted);margin:-2px 0 8px;line-height:1.7"><span style="display:inline-grid;place-items:center;width:14px;height:14px;border-radius:50%;background:#e11d48;color:#fff;font-size:9px;font-weight:800;border:1px solid #fff;margin-right:3px;vertical-align:-2px">X</span>Red: Code X / Code X-Ray &nbsp; <span style="display:inline-grid;place-items:center;width:14px;height:14px;border-radius:50%;background:#0ea5e9;color:#fff;font-size:9px;font-weight:800;border:1px solid #fff;margin-right:3px;vertical-align:-2px">D</span>Blue: dangerous condition &nbsp; <span style="display:inline-grid;place-items:center;width:14px;height:14px;border-radius:50%;background:#16a34a;color:#fff;font-size:9px;font-weight:800;border:1px solid #fff;margin-right:3px;vertical-align:-2px">V</span>Green: vacant building</div>
+    <div style="font-size:12px;color:var(--muted);margin:-2px 0 8px;line-height:1.7"><span style="display:inline-grid;place-items:center;width:14px;height:14px;border-radius:50%;background:#e11d48;color:#fff;font-size:9px;font-weight:800;border:1px solid #fff;margin-right:3px;vertical-align:-2px">X</span>Red: Code X / Code X-Ray &nbsp; <span style="display:inline-grid;place-items:center;width:14px;height:14px;border-radius:50%;background:#0284c7;color:#fff;font-size:9px;font-weight:800;border:1px solid #fff;margin-right:3px;vertical-align:-2px">D</span>Blue: dangerous condition &nbsp; <span style="display:inline-grid;place-items:center;width:14px;height:14px;border-radius:50%;background:#16a34a;color:#fff;font-size:9px;font-weight:800;border:1px solid #fff;margin-right:3px;vertical-align:-2px">V</span>Green: vacant building</div>
     ${haz}
     <p class="fine">Reference and study tool. Drive times are normal-traffic estimates, and box lines and hydrants come from Baltimore City's public 911-CAD map data. Always go by dispatch and your unit's terminal.</p>`;
 
