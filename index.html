@@ -100,6 +100,8 @@
   .walk { font-size: 15px; font-weight: 600; margin-top: 6px; }
   .gbtns { margin: 0 0 10px; }
   .btns.gbtns a { background: #1e3a5f; border-color: #2563eb; font-weight: 700; }
+  .btns.gbtns a.sv { background: #facc15; border-color: #eab308; color: #111; }      /* Street View: yellow (dark text so it reads) */
+  .btns.gbtns a.apple { background: #16a34a; border-color: #22c55e; }               /* Apple Maps: green */
   .statsub { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; }
   .num.bad { background: #ef4444; color: #fff; }
   .num.caution { background: var(--hydrant); color: #111; box-shadow: 0 0 0 3px #fde047; }
@@ -137,8 +139,8 @@
   /* ---------- Map markers ---------- */
   .call-pin { width: 22px; height: 22px; border-radius: 50% 50% 50% 0; background: #38bdf8;
     transform: rotate(-45deg); border: 3px solid #fff; box-shadow: 0 2px 6px rgba(0,0,0,.5); }
-  .hyd-pin { width: 24px; height: 24px; border-radius: 50%; background: var(--hydrant); color: #111;
-    border: 2px solid #111; font: 800 12px/20px sans-serif; text-align: center; box-shadow: 0 1px 4px rgba(0,0,0,.6); }
+  .hyd-pin { width: 17px; height: 17px; border-radius: 50%; background: var(--hydrant); color: #111;
+    border: 1.5px solid #111; font: 800 9px/14px sans-serif; text-align: center; box-shadow: 0 1px 4px rgba(0,0,0,.6); }   /* same size as the X / D / V dots */
   .mapboxgl-popup-content { background: var(--panel-solid); color: var(--text); border-radius: 10px; font-size: 13px; }
   .mapboxgl-popup-tip { border-top-color: var(--panel-solid) !important; border-bottom-color: var(--panel-solid) !important; }
 </style>
@@ -522,7 +524,7 @@ function addOverlays() {
   map.addLayer({ id: 'route-line', type: 'line', source: 'route', layout: { 'line-cap': 'round', 'line-join': 'round' },
     paint: { 'line-color': '#38bdf8', 'line-width': 5 } });
   map.addLayer({ id: 'area-hydrants', type: 'circle', source: 'area-hydrants', minzoom: 15.5,
-    paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 15.5, 3, 18, 7], 'circle-color': '#fb923c',
+    paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 15.5, 3.5, 18, 7], 'circle-color': '#fb923c',
              'circle-stroke-color': '#111', 'circle-stroke-width': 1.5 } });
   map.addLayer({ id: 'box-labels', type: 'symbol', source: 'box-labels', minzoom: 12.5,
     layout: { 'text-field': ['get', 'box'], 'text-size': ['interpolate', ['linear'], ['zoom'], 12.5, 11, 16, 16],
@@ -541,10 +543,10 @@ function addOverlays() {
     layout: { 'line-cap': 'round', 'line-join': 'round' },
     paint: { 'line-color': '#fde047', 'line-width': ['interpolate', ['linear'], ['zoom'], 14, 3, 18, 6], 'line-dasharray': [1.5, 1] } });
   map.addLayer({ id: 'callalley-ends', type: 'circle', source: 'callalley', filter: ['==', ['geometry-type'], 'Point'],
-    paint: { 'circle-radius': ['case', ['==', ['length', ['get', 'label']], 1], 11, 17],   // same size as the hydrant dots
+    paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 14, 3.5, 18, 7],   // same size as the X / D / V dots
              'circle-color': '#fde047', 'circle-stroke-color': '#111', 'circle-stroke-width': 1.5 } });
   map.addLayer({ id: 'callalley-labels', type: 'symbol', source: 'callalley', filter: ['==', ['geometry-type'], 'Point'],
-    layout: { 'text-field': ['get', 'label'], 'text-size': 13, 'text-anchor': 'center',
+    layout: { 'text-field': ['get', 'label'], 'text-size': ['interpolate', ['linear'], ['zoom'], 15, 7, 18, 9], 'text-anchor': 'center',
               'text-font': ['DIN Pro Bold', 'Arial Unicode MS Bold'], 'text-allow-overlap': true, 'text-ignore-placement': true },
     paint: { 'text-color': '#111' } });
 
@@ -1751,8 +1753,8 @@ function renderSheet() {
     <div class="addr">${esc(label)}</div>
     <div class="lockrow"><span>🔒 Locked: map taps won't move it</span><button id="clearCall">Clear call</button></div>
     <div class="btns gbtns">
-      <a href="${streetViewUrl()}" target="_blank" rel="noopener">Street View</a>
-      <a class="plain" href="https://maps.apple.com/?daddr=${dest}&dirflg=d" target="_blank" rel="noopener">Apple Maps</a>
+      <a class="sv" href="${streetViewUrl()}" target="_blank" rel="noopener">Street View</a>
+      <a class="plain apple" href="https://maps.apple.com/?daddr=${dest}&dirflg=d" target="_blank" rel="noopener">Apple Maps</a>
       <a class="plain" href="https://www.google.com/maps/dir/?api=1&destination=${dest}&travelmode=driving" target="_blank" rel="noopener">Google Maps</a>
     </div>
     ${hazAlert}
