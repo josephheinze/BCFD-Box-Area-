@@ -108,6 +108,26 @@
   .hwarn.caution { color: #fbbf24; }
   .warnbar { border-radius: 10px; padding: 8px 10px; margin: 4px 0 8px; font-weight: 700; font-size: 14px; }
   .warnbar.bad { background: #450a0a; border: 1px solid #ef4444; }
+  /* Big-text view: the key facts in huge type, readable from the cab */
+  #big { display: none; position: fixed; inset: 0; z-index: 40; background: #000; color: #fff; overflow-y: auto;
+    padding: calc(env(safe-area-inset-top) + 14px) 18px calc(env(safe-area-inset-bottom) + 24px); }
+  #big.open { display: block; }
+  /* Pre-plan notes (saved on this phone only) */
+  .note { white-space: pre-wrap; font-size: 15px; line-height: 1.4; background: #3b2f0a; border: 1px solid #ca8a04; border-radius: 10px; padding: 8px 10px; margin: 4px 0 6px; }
+  .notebtn { background: #1d212a; color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; font-size: 13px; cursor: pointer; }
+  #notesEd { display: none; position: fixed; inset: 0; z-index: 45; background: rgba(0,0,0,.85); padding: calc(env(safe-area-inset-top) + 16px) 14px 16px; }
+  #notesEd.open { display: block; }
+  #notesEd .box { max-width: 560px; margin: 0 auto; background: var(--panel-solid); border: 1px solid var(--line); border-radius: 14px; padding: 14px; color: var(--text); }
+  #notesEd textarea { font-family: inherit; width: 100%; box-sizing: border-box; min-height: 180px; font-size: 16px; line-height: 1.4; background: #0b0d12; color: var(--text); border: 1px solid var(--line); border-radius: 10px; padding: 10px; }
+  #notesEd .row { display: flex; gap: 8px; margin-top: 10px; }
+  #notesEd .row button { flex: 1; font-size: 16px; font-weight: 700; padding: 10px; border-radius: 10px; border: 1px solid var(--line); background: #1d212a; color: var(--text); }
+  #notesEd .row .save { background: #16a34a; border-color: #16a34a; color: #fff; }
+  #notesEd .row .del { background: #450a0a; border-color: #ef4444; }
+  #big .bigclose { position: sticky; top: 0; float: right; background: #1d212a; color: #fff; border: 1px solid #444; border-radius: 10px; font-size: 18px; font-weight: 700; padding: 10px 16px; }
+  #big .bl { color: #9aa3b2; font-size: 15px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; margin-top: 18px; }
+  #big .bv { font-size: 30px; font-weight: 800; line-height: 1.15; }
+  #big .ba { font-size: 40px; font-weight: 900; line-height: 1.05; margin-top: 4px; padding-right: 90px; }
+  #big .bw { font-size: 24px; font-weight: 800; line-height: 1.2; margin-top: 14px; padding: 10px 12px; border-radius: 12px; background: #450a0a; border: 2px solid #ef4444; }
   .hyd-pin.bad { background: #ef4444; color: #fff; }
   .hyd-pin.caution { box-shadow: 0 0 0 3px #fde047; }
   .btns { display: flex; gap: 8px; margin: 10px 0 4px; }
@@ -163,6 +183,14 @@
 
 <div id="banner"></div>
 <div id="toast"></div>
+<div id="big"></div>
+<div id="notesEd"><div class="box">
+  <div style="font-weight:800;font-size:17px">Pre-plan notes</div>
+  <div id="notesFor" style="color:var(--muted);font-size:13px;margin:2px 0 8px"></div>
+  <textarea id="notesText" placeholder="e.g. bars on rear windows, dog, roof access from 2904, standpipe in front stairwell"></textarea>
+  <div style="color:var(--muted);font-size:12px;margin-top:6px">Saved on this phone only.</div>
+  <div class="row"><button class="del" id="notesDel">Delete</button><button id="notesCancel">Cancel</button><button class="save" id="notesSave">Save</button></div>
+</div></div>
 
 <!-- Shown only if the app's code never runs (e.g. a phone's file preview). The script removes it at startup. -->
 <div id="nojs" style="position:fixed;inset:auto 12px 40% 12px;z-index:30;background:#7f1d1d;border:1px solid #ef4444;color:#fff;padding:14px;border-radius:12px;font-size:15px;line-height:1.45">
@@ -226,6 +254,9 @@ const HOSE_LENGTH_FT = 50;                 // used for the "about N lengths" hyd
 // Backup copy of the same hydrant data, published by the city as a separate service
 const HYDRANT_BACKUP = 'https://gisdata.baltimorecity.gov/egis/rest/services/CAD911/Hydrants_City/FeatureServer';
 const HYDRANT_FIELDS = 'HYDRANT_ID,CAD_ADDR,STREET_NUM,STREET_NAM,CROSS_STRE,CORNER_POS,LOCATION_D,LOCATION_1,SRC_MAIN_S,FEAT_STATU,CONDITION';
+// Open 311 hydrant reports (residents report broken hydrants to 311; the city posts them daily)
+const SR311 = 'https://services1.arcgis.com/UWYHeuuJISiGmgXx/ArcGIS/rest/services/311_Customer_Service_Requests_current/FeatureServer';
+const SR311_TYPES = ['WW-Hydrant Damaged', 'WW-Hydrant Leaking', 'WW-Hydrant Open'];
 const STYLES = { dark: 'mapbox://styles/mapbox/dark-v11', sat: 'mapbox://styles/mapbox/satellite-streets-v12' };
 
 // Any unexpected error shows on screen so it can be reported
@@ -810,6 +841,9 @@ function setupOrigin() {
     refreshBoxFilters();
     if ($('origin').value === 'gps') getGps().then(() => call && runRoute());
     else if (call) runRoute();
+    // move the map over the firehouse just picked (same close-up as the opening view)
+    const s = stations.find(x => x.id === $('origin').value);
+    if (s && window.map) map.flyTo({ center: [s.lng, s.lat - 0.00012], zoom: 17.15 });
   };
 }
 function fillOrigin() {
@@ -1027,6 +1061,7 @@ async function setCall(pt) {
 }
 
 function clearCall() {
+  $('big').classList.remove('open'); $('notesEd').classList.remove('open');
   callSeq++; call = null; callBox = null; routeGeo = null; nearHydrants = []; window._route = null;
   callAccess = null; callBldgInfo = null; setData('callalley', { type: 'FeatureCollection', features: [] });
   if (callMarker) callMarker.remove(); callMarker = null;
@@ -1114,10 +1149,33 @@ function pickRoute(routes) {
   return pick;
 }
 
+// Open 311 hydrant reports around the call: Damaged = don't count on it, Leaking / Open (running) = caution
+let near311 = [];   // reports that couldn't be matched to a mapped hydrant
+function fmt311Date(v) {
+  const d = new Date(typeof v === 'number' ? v : Date.parse(v));
+  return isFinite(d) ? d.toLocaleDateString() : '';
+}
+async function hydrant311(w, sth, e, n) {
+  const d = await cityQuery(0, {
+    where: `SRType IN (${SR311_TYPES.map(t => `'${t}'`).join(',')}) AND SRStatus LIKE 'Open%'`,
+    geometry: `${w},${sth},${e},${n}`, geometryType: 'esriGeometryEnvelope', inSR: '4326', spatialRel: 'esriSpatialRelIntersects',
+    outFields: 'SRType,CreatedDate,Address,Latitude,Longitude', returnGeometry: 'true' }, SR311);
+  return (d.features || []).map(f => {
+    const a = f.attributes || {};
+    const q = f.geometry && f.geometry.x != null ? [f.geometry.x, f.geometry.y] : (a.Longitude && a.Latitude ? [Number(a.Longitude), Number(a.Latitude)] : null);
+    const kind = clean(a.SRType).replace(/^WW-Hydrant\s*/i, '');
+    const date = fmt311Date(a.CreatedDate);
+    return q && { q, addr: clean(a.Address), bad: /damag/i.test(kind),
+      text: `311 report: ${/^open$/i.test(kind) ? 'open / running' : kind.toLowerCase()}${date ? ' since ' + date : ''}` };
+  }).filter(Boolean);
+}
+
 async function loadNearHydrants(seq) {
   const pt = [call.lng, call.lat];
+  near311 = [];
+  const reports = hydrant311(pt[0] - 0.011, pt[1] - 0.011 * 0.77, pt[0] + 0.011, pt[1] + 0.011 * 0.77).catch(() => null);   // runs alongside the hydrant lookup
+  let feats = [];
   try {
-    let feats = [];
     for (const d of [0.0037, 0.011]) {           // about 1,000 ft, then about 3,000 ft
       const dLat = d * 0.77;
       feats = await hydrantsInBox(pt[0] - d, pt[1] - dLat, pt[0] + d, pt[1] + dLat);
@@ -1138,6 +1196,27 @@ async function loadNearHydrants(seq) {
     nearHydrants = { error: e.message || String(e) };
   }
   renderSheet(); fitAll();
+
+  // 311 reports: each one goes on the mapped hydrant closest to where it was reported (within 150 ft)
+  const reps = await reports;
+  if (seq !== callSeq || !reps || !reps.length || !Array.isArray(nearHydrants)) return;
+  const all = feats.map(f => ({ p: f.attributes || {}, q: [f.geometry.x, f.geometry.y] }));
+  reps.forEach(r => {
+    let best = null, bestFt = Infinity;
+    all.forEach(h => { const ft = feetBetween(r.q, h.q); if (ft < bestFt) { bestFt = ft; best = h; } });
+    if (best && bestFt <= 150) {
+      best.p._311 = best.p._311 || [];
+      if (!best.p._311.some(x => x.text === r.text)) best.p._311.push(r);
+    } else if (feetBetween(pt, r.q) <= 1000) near311.push(r);
+  });
+  nearHydrants.forEach((h, i) => {
+    const t = hydrantText(h.p), m = hydMarkers[i];
+    if (!m) return;
+    const el = m.getElement();   // keep the map's own marker classes
+    el.classList.toggle('bad', !!t.bad.length); el.classList.toggle('caution', !t.bad.length && !!t.caution.length);
+    m.getPopup().setHTML(hydrantHTML(h.p));
+  });
+  renderSheet();
 }
 
 // Street-name matching: "2804 Presbury Street" and "Presbury St" -> ['presbury']
@@ -1631,6 +1710,7 @@ function hydrantText(p) {
   if (owner === 'PRI') caution.push('Private hydrant');
   if (owner === 'BCO') caution.push('County hydrant');
   if (mainIn > 0 && mainIn < 6) caution.push(`Small main (${mainIn}")`);
+  (p._311 || []).forEach(r => (r.bad ? bad : caution).push(r.text));
   return { loc, extra, main, bad: [...new Set(bad)], caution: [...new Set(caution)], id: clean(p.HYDRANT_ID) };
 }
 function hydrantHTML(p) {
@@ -1665,6 +1745,35 @@ function vacantHTML(p) {
 function fmtMin(sec) { const m = Math.round(sec / 60); return m < 1 ? '<1 min' : m + ' min'; }
 function fmtMi(m) { const mi = m / 1609.34; return (mi < 0.1 ? Math.round(m * 3.281) + ' ft' : mi.toFixed(1) + ' mi'); }
 
+// Pre-plan notes: kept in this phone's storage, one note per address
+function noteKey(label) {
+  const t = String(label || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/).filter(Boolean);
+  while (t.length && /^\d{5}$/.test(t[t.length - 1])) t.pop();                 // drop a ZIP code
+  const num = /^\d+[a-z]?$/.test(t[0] || '') ? t.shift() : '';
+  if (!num || !t.length) return null;
+  if (t.length > 2 && DIRS[t[0]]) t[0] = DIRS[t[0]];                            // West -> w
+  if (t.length > 1 && SUFFIX[t[t.length - 1]]) t[t.length - 1] = SUFFIX[t[t.length - 1]];   // Avenue -> ave
+  return 'note:' + num + ' ' + t.join(' ');
+}
+function openNotes() {
+  const k = call && noteKey(call.label);
+  if (!k) { toast('Waiting for the address…'); return; }
+  $('notesFor').textContent = call.label;
+  $('notesText').value = store(k) || '';
+  $('notesEd').classList.add('open');
+  $('notesSave').onclick = () => {
+    const v = $('notesText').value.trim();
+    try { if (v) localStorage.setItem(k, v); else localStorage.removeItem(k); } catch (e) { toast("Couldn't save the note on this phone"); }
+    $('notesEd').classList.remove('open'); renderSheet();
+  };
+  $('notesDel').onclick = () => {
+    if (!confirm('Delete the notes for ' + call.label + '?')) return;
+    try { localStorage.removeItem(k); } catch (e) {}
+    $('notesEd').classList.remove('open'); renderSheet();
+  };
+  $('notesCancel').onclick = () => $('notesEd').classList.remove('open');
+}
+
 function renderSheet() {
   if (!call) return;
   const o = currentOrigin();
@@ -1680,6 +1789,7 @@ function renderSheet() {
   else if (rt && rt.duration != null) routeTxt = `${fmtMi(rt.distance)} · about ${fmtMin(rt.duration)}`;
 
   const dest = `${call.lat},${call.lng}`;
+  const nk = noteKey(call.label), noteTxt = nk ? store(nk) : null;
   let hyd = '<div class="loading">Finding hydrants…</div>';
   if (nearHydrants && nearHydrants.error) {
     hyd = `<div class="hint" style="color:#fca5a5">Couldn't load hydrants from the city's server: ${esc(nearHydrants.error)}</div>`;
@@ -1700,6 +1810,8 @@ function renderSheet() {
         <div class="main">${esc(t.loc)} <span class="tag">${Math.round(h.ft)} ft · ~${lengths} length${lengths > 1 ? 's' : ''}</span>${t.main ? `<span class="tag">${esc(t.main)}</span>` : ''}</div>
         ${warn}${t.extra ? `<div class="sub">${esc(t.extra)}</div>` : ''}</div></div>`;
     }).join('') : '<div class="hint">No hydrants found within about 3,000 ft.</div>';
+    if (near311.length) hyd += near311.map(r =>
+      `<div class="hwarn ${r.bad ? 'bad' : 'caution'}" style="margin-top:6px">⚠ ${esc(r.text)} near ${esc(r.addr || 'here')} (not matched to a mapped hydrant)</div>`).join('');
   }
 
   let bldgInfoTxt = '<span class="loading">checking property records…</span>', bldgInfoSub = '';
@@ -1755,7 +1867,7 @@ function renderSheet() {
 
   $('sheetBody').innerHTML = `
     <div class="addr">${esc(label)}</div>
-    <div class="lockrow"><span>🔒 Locked: map taps won't move it</span><button id="clearCall">Clear call</button></div>
+    <div class="lockrow"><span>🔒 Locked: map taps won't move it</span><span style="display:flex;gap:6px"><button id="bigBtn">Big text</button><button id="clearCall">Clear call</button></span></div>
     <div class="btns gbtns">
       <a class="sv" href="${streetViewUrl()}" target="_blank" rel="noopener">Street View</a>
       <a class="plain apple" href="https://maps.apple.com/?daddr=${dest}&dirflg=d" target="_blank" rel="noopener">Apple Maps</a>
@@ -1768,6 +1880,8 @@ function renderSheet() {
       <div class="stat wide"><span>Building</span><b>${bldgInfoTxt}</b>${bldgInfoSub}</div>
       <div class="stat wide"><span>Miles and estimated time from ${esc(o ? o.name : '…')}</span><b>${routeTxt}</b></div>
     </div>
+    <h3>Pre-plan notes</h3>
+    ${noteTxt ? `<div class="note">${esc(noteTxt)}</div><button class="notebtn" id="noteBtn">Edit notes</button>` : `<div class="hint" style="margin-bottom:6px">No notes for this address.</div><button class="notebtn" id="noteBtn">Add notes</button>`}
     ${dirSection}
     <h3>Nearest hydrants</h3>
     ${hyd}
@@ -1777,6 +1891,31 @@ function renderSheet() {
     <div style="font-size:12px;color:var(--muted);margin:-2px 0 8px;line-height:1.7"><span style="display:inline-grid;place-items:center;width:14px;height:14px;border-radius:50%;background:#e11d48;color:#fff;font-size:9px;font-weight:800;border:1px solid #fff;margin-right:3px;vertical-align:-2px">X</span>Red: Code X / Code X-Ray &nbsp; <span style="display:inline-grid;place-items:center;width:14px;height:14px;border-radius:50%;background:#e11d48;color:#fff;font-size:9px;font-weight:800;border:1px solid #fff;margin-right:3px;vertical-align:-2px">D</span>Red: dangerous condition &nbsp; <span style="display:inline-grid;place-items:center;width:14px;height:14px;border-radius:50%;background:#16a34a;color:#fff;font-size:9px;font-weight:800;border:1px solid #fff;margin-right:3px;vertical-align:-2px">V</span>Green: vacant building</div>
     ${haz}
     <p class="fine">Reference and study tool. Drive times are normal-traffic estimates, and box lines and hydrants come from Baltimore City's public 911-CAD map data. Always go by dispatch and your unit's terminal.</p>`;
+
+  // Big-text view
+  let bigHyd = '<span class="loading">finding…</span>', bigWarn = '';
+  if (Array.isArray(nearHydrants) && nearHydrants.length) {
+    const t0 = hydrantText(nearHydrants[0].p);
+    bigHyd = `#1 ${esc(t0.loc)} · ${Math.round(nearHydrants[0].ft)} ft`;
+    if (t0.bad.length) bigWarn += `<div class="bw">⚠ Closest hydrant flagged: ${esc(t0.bad.join(', '))}</div>`;
+  } else if (Array.isArray(nearHydrants) || (nearHydrants && nearHydrants.error)) bigHyd = 'None found';
+  if (Array.isArray(nearXray) && nearXray.length && nearXray[0].ft <= 80)
+    bigWarn = `<div class="bw">⚠ ${esc(clean(nearXray[0].p.szType) || 'Hazard')} building at or next to this address</div>` + bigWarn;
+  $('big').innerHTML = `<button class="bigclose" id="bigClose">Close</button>
+    <div class="bl">Address</div><div class="ba">${esc(label)}</div>
+    ${bigWarn}
+    ${noteTxt ? `<div class="bl">Pre-plan notes</div><div class="bv" style="white-space:pre-wrap;color:#fde68a">${esc(noteTxt)}</div>` : ''}
+    <div class="bl">Box · first due</div><div class="bv">${boxTxt} · ${house}</div>
+    <div class="bl">Building</div><div class="bv">${bldgInfoTxt}</div>
+    <div class="bl">A side</div><div class="bv">${callAccess && callAccess.street ? esc(callAccess.street) : callAccess ? '—' : '<span class="loading">checking…</span>'}</div>
+    <div class="bl">From ${esc(o ? o.name : '…')}</div><div class="bv">${routeTxt}</div>
+    <div class="bl">Nearest hydrant</div><div class="bv">${bigHyd}</div>`;
+  $('bigClose').onclick = () => $('big').classList.remove('open');
+  const bb = $('bigBtn');
+  if (bb) bb.onclick = () => $('big').classList.add('open');
+
+  const nb = $('noteBtn');
+  if (nb) nb.onclick = openNotes;
 
   const cc = $('clearCall');
   if (cc) cc.onclick = () => { $('q').value = ''; $('suggest').style.display = 'none'; clearCall(); };
