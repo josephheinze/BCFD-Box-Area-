@@ -100,6 +100,7 @@
   .walk { font-size: 15px; font-weight: 600; margin-top: 6px; }
   .gbtns { margin: 0 0 10px; }
   .btns.gbtns a { background: #1e3a5f; border-color: #2563eb; font-weight: 700; }
+  .btns.gbtns a.plain { background: #1d212a; border-color: var(--line); font-weight: inherit; }   /* same look as before the move */
   .statsub { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; }
   .num.bad { background: #ef4444; color: #fff; }
   .num.caution { background: var(--hydrant); color: #111; box-shadow: 0 0 0 3px #fde047; }
@@ -1752,7 +1753,8 @@ function renderSheet() {
     <div class="lockrow"><span>🔒 Locked: map taps won't move it</span><button id="clearCall">Clear call</button></div>
     <div class="btns gbtns">
       <a href="${streetViewUrl()}" target="_blank" rel="noopener">Street View</a>
-      <a href="${earthUrl()}" target="_blank" rel="noopener">Google Earth</a>
+      <a class="plain" href="https://maps.apple.com/?daddr=${dest}&dirflg=d" target="_blank" rel="noopener">Apple Maps</a>
+      <a class="plain" href="https://www.google.com/maps/dir/?api=1&destination=${dest}&travelmode=driving" target="_blank" rel="noopener">Google Maps</a>
     </div>
     ${hazAlert}
     <div class="stats">
@@ -1768,10 +1770,6 @@ function renderSheet() {
     <div class="stat wide"><b>${accessTxt}</b>${accessSub}</div>
     <h3>Code X-Ray and vacant buildings</h3>
     ${haz}
-    <div class="btns" style="margin-top:14px">
-      <a href="https://www.google.com/maps/dir/?api=1&destination=${dest}&travelmode=driving" target="_blank" rel="noopener">Google Maps</a>
-      <a href="https://maps.apple.com/?daddr=${dest}&dirflg=d" target="_blank" rel="noopener">Apple Maps</a>
-    </div>
     <p class="fine">Reference and study tool. Drive times are normal-traffic estimates, and box lines and hydrants come from Baltimore City's public 911-CAD map data. Always go by dispatch and your unit's terminal.</p>`;
 
   const cc = $('clearCall');
