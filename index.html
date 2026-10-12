@@ -1530,7 +1530,7 @@ function describeBuilding(a) {
   } else {
     text = clean(a.DESCCIUSE) || clean(a.DESCLU) || 'Building type not recorded'; other = true;
   }
-  if (constr && !other) text += /single-family$/.test(text) ? `, ${constr}` : ` · ${constr}`;
+  if (constr && !other && !(constr === 'wood frame' && /rowhouse/.test(text))) text += /single-family$/.test(text) ? `, ${constr}` : ` · ${constr}`;
   const yr = parseInt(a.YEARBLT, 10);
   const detail = [clean(a.ADDRESS), yr > 1700 ? `built ${yr}` : '', [clean(a.DESCSTYL), clean(a.DESCBLDG), clean(a.DESCCNST)].filter(Boolean).join(' / ')]
     .filter(Boolean).join(' · ');
