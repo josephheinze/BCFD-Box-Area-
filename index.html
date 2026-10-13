@@ -106,10 +106,6 @@
   .lockrow { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: -4px 0 10px; }
   .lockrow span { color: var(--muted); font-size: 13px; }
   .lockrow button { background: #1d212a; color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; font-size: 13px; cursor: pointer; }
-  .vdot.occ { background: #6b7280; }
-  .occbtn { background: #1d212a; color: var(--text); border: 1px solid var(--line); border-radius: 7px; padding: 3px 8px; font-size: 12px; margin-left: 6px; cursor: pointer; }
-  .occbtn.occyes { background: rgba(253,224,71,.22); border-color: rgba(253,224,71,.7); color: #fde047; font-weight: 800; line-height: 1.15; text-align: center; vertical-align: middle; }
-  .occtxt { color: #d1d5db; font-weight: 700; }
   #confirmBox { display: none; position: fixed; inset: 0; z-index: 55; background: rgba(0,0,0,.7); align-items: center; justify-content: center; padding: 16px; }
   #confirmBox.open { display: flex; }
   #confirmBox .box { width: min(92vw, 420px); background: var(--panel-solid); border: 1px solid var(--line); border-radius: 14px; padding: 16px; color: var(--text); }
@@ -621,10 +617,10 @@ function addOverlays() {
   map.addSource('vacant', { type: 'geojson', data: areaVacant });
   map.addSource('xray', { type: 'geojson', data: areaXray });
   map.addLayer({ id: 'vacant', type: 'circle', source: 'vacant', minzoom: 15.5,
-    paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 15.5, 3.5, 18, 7], 'circle-color': ['case', ['==', ['get', 'occ'], 1], '#6b7280', '#16a34a'],   // gray = marked occupied
+    paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 15.5, 3.5, 18, 7], 'circle-color': '#16a34a',
              'circle-stroke-color': '#fff', 'circle-stroke-width': 1.5 } });
   map.addLayer({ id: 'vacant-v', type: 'symbol', source: 'vacant', minzoom: 16,
-    layout: { 'text-field': ['case', ['==', ['get', 'occ'], 1], 'O', 'V'], 'text-size': ['interpolate', ['linear'], ['zoom'], 16, 7, 18, 9],
+    layout: { 'text-field': 'V', 'text-size': ['interpolate', ['linear'], ['zoom'], 16, 7, 18, 9],
               'text-font': ['DIN Pro Bold', 'Arial Unicode MS Bold'], 'text-allow-overlap': true, 'text-ignore-placement': true },
     paint: { 'text-color': '#fff' } });
   map.addLayer({ id: 'xray', type: 'circle', source: 'xray', minzoom: 14,
@@ -832,7 +828,7 @@ function showHazards() {
     return c === c0 ? f : Object.assign({}, f, { geometry: { type: 'Point', coordinates: c } });
   }) });
   setData('xray', nudge(dedupe(areaXray)));
-  setData('vacant', nudge(dedupe(areaVacant).map(f => Object.assign({}, f, { properties: Object.assign({}, f.properties, { occ: occDate(f.properties) ? 1 : 0 }) }))));
+  setData('vacant', nudge(dedupe(areaVacant)));
 }
 
 async function loadAreaHazards() {
@@ -1799,29 +1795,10 @@ function askConfirm(msg, okLabel) {
     $('confirmNo').onclick = () => done(false);
   });
 }
-// "Marked occupied": kept on this phone, tied to the city's vacant notice. When the city closes that notice,
-// the notice (and this mark with it) drops off the app.
-function occKey(p) {
-  const n = clean(p.NoticeNum);
-  return n ? 'occ:' + n : (noteKey(clean(p.Address)) || '').replace(/^note:/, 'occ:') || null;
-}
 // date and time of a change, e.g. "10/12/2026, 6:47 PM"
 function fmtStamp(ms) { const d = new Date(Number(ms)); return isFinite(d) ? d.toLocaleString([], { month: 'numeric', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }) : ''; }
-function occDate(p) { const k = occKey(p); const v = k ? store(k) : null; return v ? fmtStamp(v) : null; }
-async function setOccupied(p, on) {
-  const k = occKey(p), addr = clean(p.Address) || 'this property';
-  if (!k) return;
-  const ok = on
-    ? await askConfirm(`Mark ${addr} as OCCUPIED?\n\nThe city still lists it as vacant. This mark is saved on this phone only.`, 'Confirm')
-    : await askConfirm(`Change ${addr} back to the city's listing (vacant)?`, 'Confirm change');
-  if (!ok) return;
-  try { if (on) localStorage.setItem(k, String(Date.now())); else localStorage.removeItem(k); } catch (e) { toast("Couldn't save on this phone"); return; }
-  renderSheet(); showHazards();
-}
 
 function vacantHTML(p) {
-  const occ = occDate(p);
-  if (occ) return `<b>Marked OCCUPIED by user ${esc(occ)}</b><br>${esc(clean(p.Address))}<br><span style="color:#9aa3b2">City still lists a vacant notice${clean(p.NoticeNum) ? ' · #' + esc(clean(p.NoticeNum)) : ''}</span>`;
   return `<b>Vacant building notice</b><br>${esc(clean(p.Address))}` +
     `${fmtDate(p.DateNotice) ? `<br><span style="color:#9aa3b2">Notice ${fmtDate(p.DateNotice)}${clean(p.NoticeNum) ? ' · #' + esc(clean(p.NoticeNum)) : ''}</span>` : ''}`;
 }
@@ -1940,12 +1917,7 @@ function renderSheet() {
     else if (Array.isArray(nearVacant)) {
       parts.push(nearVacant.length
         ? `<div class="sub" style="margin-top:6px">Vacant notices within 300 ft: <b style="color:var(--text)">${nearVacant.length}</b></div>` +
-          nearVacant.slice(0, 5).map((h, i) => {
-            const occ = occDate(h.p);
-            return occ
-              ? `<div class="sub"><span class="vdot occ">O</span> ${esc(clean(h.p.Address))} <span class="tag">${Math.round(h.ft)} ft</span><br><span class="occtxt">OCCUPIED</span> (marked by user ${esc(occ)}; city still lists vacant)<button class="occbtn" data-occ="${i}" data-on="0">Undo</button></div>`
-              : `<div class="sub"><span class="vdot">V</span> ${esc(clean(h.p.Address))} <span class="tag">${Math.round(h.ft)} ft</span><button class="occbtn occyes" data-occ="${i}" data-on="1">Return to<br>occupied</button></div>`;
-          }).join('')
+          nearVacant.slice(0, 5).map(h => `<div class="sub"><span class="vdot">V</span> ${esc(clean(h.p.Address))} <span class="tag">${Math.round(h.ft)} ft</span></div>`).join('')
         : '<div class="hint">No open vacant building notices within 300 ft.</div>');
     }
     haz = parts.join('');
@@ -1980,11 +1952,10 @@ function renderSheet() {
     <h3>Rear / alley access</h3>
     <div class="stat wide"><b>${accessTxt}</b>${accessSub}</div>
     <h3>Code X-Ray and vacant buildings</h3>
-    <div style="font-size:12px;color:var(--muted);margin:-2px 0 8px;line-height:1.7"><span style="display:inline-grid;place-items:center;width:14px;height:14px;border-radius:50%;background:#e11d48;color:#fff;font-size:9px;font-weight:800;border:1px solid #fff;margin-right:3px;vertical-align:-2px">X</span>Red: Code X / Code X-Ray &nbsp; <span style="display:inline-grid;place-items:center;width:14px;height:14px;border-radius:50%;background:#e11d48;color:#fff;font-size:9px;font-weight:800;border:1px solid #fff;margin-right:3px;vertical-align:-2px">D</span>Red: dangerous condition &nbsp; <span style="display:inline-grid;place-items:center;width:14px;height:14px;border-radius:50%;background:#16a34a;color:#fff;font-size:9px;font-weight:800;border:1px solid #fff;margin-right:3px;vertical-align:-2px">V</span>Green: vacant building &nbsp; <span style="display:inline-grid;place-items:center;width:14px;height:14px;border-radius:50%;background:#6b7280;color:#fff;font-size:9px;font-weight:800;border:1px solid #fff;margin-right:3px;vertical-align:-2px">O</span>Gray: marked occupied by user</div>
+    <div style="font-size:12px;color:var(--muted);margin:-2px 0 8px;line-height:1.7"><span style="display:inline-grid;place-items:center;width:14px;height:14px;border-radius:50%;background:#e11d48;color:#fff;font-size:9px;font-weight:800;border:1px solid #fff;margin-right:3px;vertical-align:-2px">X</span>Red: Code X / Code X-Ray &nbsp; <span style="display:inline-grid;place-items:center;width:14px;height:14px;border-radius:50%;background:#e11d48;color:#fff;font-size:9px;font-weight:800;border:1px solid #fff;margin-right:3px;vertical-align:-2px">D</span>Red: dangerous condition &nbsp; <span style="display:inline-grid;place-items:center;width:14px;height:14px;border-radius:50%;background:#16a34a;color:#fff;font-size:9px;font-weight:800;border:1px solid #fff;margin-right:3px;vertical-align:-2px">V</span>Green: vacant building</div>
     ${haz}
     <p class="fine">Reference and study tool. Drive times are normal-traffic estimates, and box lines and hydrants come from Baltimore City's public 911-CAD map data. Always go by dispatch and your unit's terminal. Unofficial app, not a Baltimore City Fire Department product. © 2026 Joseph Heinze. All rights reserved.</p>`;
 
-  $('sheetBody').querySelectorAll('[data-occ]').forEach(el => el.onclick = () => setOccupied(nearVacant[+el.dataset.occ].p, el.dataset.on === '1'));
   const nb = $('noteBtn');
   if (nb) nb.onclick = openNotes;
 
