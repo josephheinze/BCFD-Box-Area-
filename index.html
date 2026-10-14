@@ -39,6 +39,10 @@
   html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
     font: 15px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; overflow: hidden; }
   #map { position: absolute; inset: 0; }
+  /* Compass rose, bottom-left of the map (turns with the map so N always points north) */
+  #compass { position: fixed; left: 12px; bottom: 120px; width: 64px; height: 64px; z-index: 9; pointer-events: none;
+    filter: drop-shadow(0 1px 3px rgba(0,0,0,.7)); }
+  #compass svg { width: 100%; height: 100%; display: block; }
 
   /* ---------- Top bar ---------- */
   #topbar { position: fixed; top: 0; left: 0; right: 0; z-index: 10;
@@ -186,6 +190,17 @@
 </head>
 <body>
 <div id="map"></div>
+<div id="compass" aria-label="Compass"><svg viewBox="0 0 100 100">
+  <circle cx="50" cy="50" r="47" fill="rgba(17,19,23,.72)" stroke="#fff" stroke-width="2"/>
+  <polygon points="50,24 56,50 50,76 44,50" fill="#fff"/>
+  <polygon points="50,24 56,50 44,50" fill="#e11d48"/>
+  <polygon points="24,50 50,44 76,50 50,56" fill="#9aa3b2"/>
+  <circle cx="50" cy="50" r="3.5" fill="#111" stroke="#fff" stroke-width="1.5"/>
+  <text x="50" y="21" text-anchor="middle" font-size="19" font-weight="900" fill="#f87171" font-family="sans-serif">N</text>
+  <text x="50" y="94" text-anchor="middle" font-size="18" font-weight="800" fill="#fff" font-family="sans-serif">S</text>
+  <text x="87" y="56.5" text-anchor="middle" font-size="18" font-weight="800" fill="#fff" font-family="sans-serif">E</text>
+  <text x="13" y="56.5" text-anchor="middle" font-size="18" font-weight="800" fill="#fff" font-family="sans-serif">W</text>
+</svg></div>
 
 <div id="topbar">
   <div class="search">
@@ -518,6 +533,17 @@ function start() {
   });
 
   map.on('style.load', addOverlays);
+  // Compass rose: turns with the map, and sits just above the bottom panel (or beside it on a wide screen)
+  const placeCompass = () => {
+    const c = $('compass'), sh = $('sheet').getBoundingClientRect();
+    if (sh.width < window.innerWidth - 40) { c.style.left = (sh.right + 12) + 'px'; c.style.bottom = '34px'; }
+    else { c.style.left = '12px'; c.style.bottom = (window.innerHeight - sh.top + 12) + 'px'; }
+  };
+  const turnCompass = () => { $('compass').querySelector('svg').style.transform = `rotate(${-map.getBearing()}deg)`; };
+  map.on('rotate', turnCompass);
+  window.addEventListener('resize', placeCompass);
+  if (window.ResizeObserver) new ResizeObserver(placeCompass).observe($('sheet'));
+  placeCompass(); turnCompass();
   map.on('click', e => {
     const t = e.originalEvent && e.originalEvent.target;
     if (t && t.closest && t.closest('.mapboxgl-marker')) return; // tapped a pin; let its popup open
