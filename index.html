@@ -110,6 +110,7 @@
   .lockrow { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: -4px 0 10px; }
   .lockrow span { color: var(--muted); font-size: 13px; }
   .lockrow button { background: #1d212a; color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; font-size: 13px; cursor: pointer; }
+  .lockrow #clearCall { background: #ffffff; color: #111; border-color: #d1d5db; font-weight: 700; font-size: 15px; padding: 8px 14px; }
   #confirmBox { display: none; position: fixed; inset: 0; z-index: 55; background: rgba(0,0,0,.7); align-items: center; justify-content: center; padding: 16px; }
   #confirmBox.open { display: flex; }
   #confirmBox .box { width: min(92vw, 420px); background: var(--panel-solid); border: 1px solid var(--line); border-radius: 14px; padding: 16px; color: var(--text); }
@@ -1141,6 +1142,8 @@ function clearCall() {
   setData('route', { type: 'FeatureCollection', features: [] });
   refreshBoxFilters();
   $('sheetBody').innerHTML = '<div class="hint">Search a call address, or tap the building on the map.</div>';
+  // back over the firehouse chosen in the "From" bar (same close-up as the opening view, north up)
+  if (window.map) map.flyTo({ center: startCenter(), zoom: 17.15, bearing: 0, pitch: 0 });
 }
 
 async function runRoute() {
