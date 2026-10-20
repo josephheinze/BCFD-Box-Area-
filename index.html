@@ -1509,6 +1509,8 @@ function drawFrontBack() {
     callAccess.sides = sd;
     (walkOK() ? callAccess.walks || [] : []).forEach(w => fc.features.push({ type: 'Feature', properties: {}, geometry: w.geometry }));
     mark('A', sd.A); mark('B', sd.B); mark('D', sd.D); mark(sd.cLabel, sd.C);
+    // the call pin sits directly above the A dot (on screen), so it's in the same spot every call
+    if (callMarker && sd.A) { callMarker.setLngLat(sd.A); callMarker.setOffset([0, -9]); }
   }
   if (callAccess) callAccess.line = fc;
   setData('callalley', fc);
