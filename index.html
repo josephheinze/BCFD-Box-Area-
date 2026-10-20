@@ -139,6 +139,7 @@
   .addralert.red { background: #450a0a; border: 2px solid #ef4444; color: #fff; }
   .addralert.vac { background: #052e16; border: 2px solid #16a34a; color: #fff; }
   .addralert small { display: block; font-weight: 600; font-size: 11px; color: #fecaca; margin-top: 2px; }
+  .addralert small.vacwhen { font-size: 12px; font-weight: 700; color: #bbf7d0; }
   /* Opening screen: department patch with the firehouse picker at the top middle */
   #splash { position: fixed; inset: 0; z-index: 60; display: flex; flex-direction: column; align-items: center;
     background: radial-gradient(circle at 50% 50%, #b81d0b 0%, #7a1005 45%, #2e0300 100%);
@@ -1916,8 +1917,13 @@ function renderSheet() {
       const notes = clean(h.p.szText);
       addrAlert += `<div class="addralert red">⚠ ${dng ? 'DANGEROUS CONDITION' : esc(t.toUpperCase())} — THIS ADDRESS${notes ? `<small>${esc(notes.length > 160 ? notes.slice(0, 160) + '…' : notes)}</small>` : ''}</div>`;
     });
-    if (Array.isArray(nearVacant) && nearVacant.some(h => sameAddr(clean(h.p.Address), callKey)))
-      addrAlert += `<div class="addralert vac">⚠ VACANT — THIS ADDRESS<small style="color:#bbf7d0">Open city vacant building notice</small></div>`;
+    const vacHere = Array.isArray(nearVacant) ? nearVacant.filter(h => sameAddr(clean(h.p.Address), callKey)) : [];
+    if (vacHere.length) {
+      const last = Math.max(...vacHere.map(h => Number(h.p.DateNotice) || 0));          // most recent notice
+      const d = last ? new Date(last) : null;
+      const when = d && isFinite(d) ? `${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}/${d.getFullYear()}` : null;
+      addrAlert += `<div class="addralert vac">⚠ VACANT DWELLING<small class="vacwhen">${when ? 'REPORTED VACANT ON ' + when : 'REPORTED VACANT (date not listed)'}</small></div>`;
+    }
   }
 
   const steps = rt && rt.legs ? rt.legs[0].steps.map((s, i) =>
