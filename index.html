@@ -112,7 +112,11 @@
   .lockrow .lrlbl { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
   .lockrow .lrnum { display: block; font-size: 22px; color: var(--mine); line-height: 1.1; white-space: nowrap; }
   .lockrow .lrfd { display: block; font-size: 11px; font-weight: 600; color: var(--text); line-height: 1.2; }
-  .lockrow .lrlock { justify-self: end; }
+  .addrrow { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+  .addrrow .lrlock { color: var(--muted); font-size: 13px; white-space: nowrap; margin-top: 8px; }
+  .lockrow .lrsv { justify-self: center; text-align: center; text-decoration: none; background: #ffffff; border: 1px solid #d1d5db; color: #111;
+    font-weight: 700; border-radius: 10px; padding: 10px 14px; font-size: 14px; white-space: nowrap; }
+  .lockrow #clearCall { justify-self: end; }
   .lockrow span { color: var(--muted); font-size: 13px; }
   .lockrow button { background: #1d212a; color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; font-size: 13px; cursor: pointer; }
   .lockrow #clearCall { background: #ffffff; color: #111; border-color: #d1d5db; font-weight: 700; font-size: 15px; padding: 8px 14px; }
@@ -137,7 +141,7 @@
   .warnbar { border-radius: 10px; padding: 8px 10px; margin: 4px 0 8px; font-weight: 700; font-size: 14px; }
   .warnbar.bad { background: #450a0a; border: 1px solid #ef4444; }
   /* Alert when the call address itself is Code X / X-Ray, dangerous condition, or vacant */
-  .addralert { grid-column: 1 / -1; border-radius: 10px; padding: 8px 10px; font-weight: 800; font-size: 15px; line-height: 1.3; }
+  .addralert { grid-column: 1 / -1; margin: 0 0 8px; border-radius: 10px; padding: 8px 10px; font-weight: 800; font-size: 15px; line-height: 1.3; }
   .addralert.red { background: #450a0a; border: 2px solid #ef4444; color: #fff; }
   .addralert.vac { background: #052e16; border: 2px solid #16a34a; color: #fff; }
   .addralert small { display: block; font-weight: 600; font-size: 13px; color: #fecaca; margin-top: 2px; }
@@ -2006,16 +2010,10 @@ function renderSheet() {
   else if (rt === 'loading') dirSection = '<h3>Turn-by-turn directions</h3><div class="loading">Getting directions…</div>';
 
   $('sheetBody').innerHTML = `
-    <div class="addr">${esc(label)}</div>
-    <div class="lockrow"><div class="lrbox"><span class="lrlbl">Box number</span><b class="lrnum">${boxTxt}</b><small class="lrfd">${house}</small></div><button id="clearCall">Clear call</button><span class="lrlock">🔒 Locked</span></div>
-    <div class="btns gbtns">
-      <a class="sv" href="${streetViewUrl()}" target="_blank" rel="noopener">Street View</a>
-      <a class="plain apple" href="https://maps.apple.com/?daddr=${dest}&dirflg=d" target="_blank" rel="noopener">Apple Maps</a>
-      <a class="plain" href="https://www.google.com/maps/dir/?api=1&destination=${dest}&travelmode=driving" target="_blank" rel="noopener">Google Maps</a>
-    </div>
-    ${hazAlert}
+    <div class="addrrow"><div class="addr">${esc(label)}</div><span class="lrlock">🔒 Locked</span></div>
+    <div class="lockrow"><div class="lrbox"><span class="lrlbl">Box number</span><b class="lrnum">${boxTxt}</b><small class="lrfd">${house}</small></div><a class="lrsv" href="${streetViewUrl()}" target="_blank" rel="noopener">Street View</a><button id="clearCall">Clear call</button></div>
+    ${addrAlert}${hazAlert}
     <div class="stats">
-      ${addrAlert}
       <div class="stat wide"><span>Building</span><b>${bldgInfoTxt}</b>${bldgInfoSub}</div>
       <div class="stat wide"><span>Miles and estimated time from ${esc(o ? o.name : '…')}</span><b>${routeTxt}</b></div>
     </div>
