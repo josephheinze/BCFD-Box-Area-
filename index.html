@@ -157,6 +157,11 @@
   .btns a { flex: 1; text-align: center; text-decoration: none; color: var(--text); background: #1d212a;
     border: 1px solid var(--line); border-radius: 10px; padding: 10px; font-size: 14px; }
   h3 { font-size: 14px; font-weight: 800; text-transform: uppercase; letter-spacing: .05em; color: #e5e7eb; margin: 18px 0 6px; padding-bottom: 4px; border-bottom: 1px solid var(--line); }
+  .legend { display: flex; justify-content: space-between; align-items: center; gap: 6px; flex-wrap: nowrap; margin: 2px 0 8px;
+    font-size: clamp(8.5px, 2.9vw, 12px); color: #cbd5e1; white-space: nowrap; }
+  .legend > span { display: inline-flex; align-items: center; gap: 4px; }
+  .lgdot { display: inline-grid; place-items: center; width: 15px; height: 15px; border-radius: 50%; color: #fff; font-size: 9px; font-weight: 800; border: 1px solid #fff; flex: none; }
+  @media (max-width: 340px) { .legend { gap: 3px; } .lgdot { width: 13px; height: 13px; font-size: 8px; } }
   .vachead { font-size: 14px; font-weight: 800; color: #e5e7eb; margin: 12px 0 2px; }
   .hyd { display: flex; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line); cursor: pointer; }
   .hyd:last-child { border-bottom: 0; }
@@ -1944,7 +1949,7 @@ function renderSheet() {
     <h3>Nearest hydrants</h3>
     ${hyd}
     <h3>Code X-Ray and vacant buildings</h3>
-    <div style="font-size:12px;color:var(--muted);margin:-2px 0 8px;line-height:1.7"><span style="display:inline-grid;place-items:center;width:14px;height:14px;border-radius:50%;background:#e11d48;color:#fff;font-size:9px;font-weight:800;border:1px solid #fff;margin-right:3px;vertical-align:-2px">X</span>Red: Code X / Code X-Ray &nbsp; <span style="display:inline-grid;place-items:center;width:14px;height:14px;border-radius:50%;background:#e11d48;color:#fff;font-size:9px;font-weight:800;border:1px solid #fff;margin-right:3px;vertical-align:-2px">D</span>Red: dangerous condition &nbsp; <span style="display:inline-grid;place-items:center;width:14px;height:14px;border-radius:50%;background:#16a34a;color:#fff;font-size:9px;font-weight:800;border:1px solid #fff;margin-right:3px;vertical-align:-2px">V</span>Green: vacant building</div>
+    <div class="legend"><span><span class="lgdot" style="background:#e11d48">X</span>Code X / X-Ray</span><span><span class="lgdot" style="background:#e11d48">D</span>Dangerous condition</span><span><span class="lgdot" style="background:#16a34a">V</span>Vacant building</span></div>
     ${haz}
     <p class="fine">Reference and study tool. Drive times are normal-traffic estimates, and box lines and hydrants come from Baltimore City's public 911-CAD map data. Always go by dispatch and your unit's terminal. Unofficial app, not a Baltimore City Fire Department product. © 2026 Joseph Heinze. All rights reserved.</p>`;
 
