@@ -2079,7 +2079,7 @@ function renderSheet() {
   }
 
   const steps = rt && rt.legs ? rt.legs[0].steps.map((s, i) =>
-    `<div class="step"><div class="num">${i + 1}</div><div class="main">${esc(stepText(s, i))}${s.distance > 0 ? ` <span class="tag">${fmtMi(s.distance)}</span>` : ''}</div></div>`).join('') : '';
+    `<div class="step"><div class="num">${i + 1}</div><div class="main">${esc(stepText(s, i).replace(/\bdestination\b/g, 'location').replace(/\bDestination\b/g, 'Location'))}${s.distance > 0 ? ` <span class="tag">${fmtMi(s.distance)}</span>` : ''}</div></div>`).join('') : '';
   let dirSection = '';
   if (steps) dirSection = `<h3>Turn-by-turn directions</h3>${steps}`;
   else if (rt === 'loading') dirSection = '<h3>Turn-by-turn directions</h3><div class="loading">Getting directions…</div>';
