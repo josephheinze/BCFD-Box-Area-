@@ -93,7 +93,8 @@
   }
   .hint { color: var(--muted); padding: 6px 0 4px; }
   .addr { font-size: 24px; font-weight: 800; line-height: 1.2; margin: 2px 0 10px; }
-  .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .stats { display: grid; grid-template-columns: 3fr 2fr; gap: 8px; }
+  .tag.thisaddr { background: rgba(253,224,71,.22); color: #fde047; font-weight: 800; }
   .stat { background: #1d212a; border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; }
   .stat span { display: block; font-size: 12.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: #cbd5e1; }
   .stat b { font-size: 16px; }
@@ -162,6 +163,7 @@
   .legend > span { display: inline-flex; align-items: center; gap: 4px; }
   .lgdot { display: inline-grid; place-items: center; width: 15px; height: 15px; border-radius: 50%; color: #fff; font-size: 9px; font-weight: 800; border: 1px solid #fff; flex: none; }
   @media (max-width: 340px) { .legend { gap: 3px; } .lgdot { width: 13px; height: 13px; font-size: 8px; } }
+  .hyd[data-h] .tag { font-size: 13px; font-weight: 700; color: #e5e7eb; padding: 2px 7px; margin-top: 3px; }   /* hydrant feet / hose lengths / main size */
   .vachead { font-size: 14px; font-weight: 800; color: #e5e7eb; margin: 12px 0 2px; }
   .hyd { display: flex; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line); cursor: pointer; }
   .hyd:last-child { border-bottom: 0; }
@@ -1242,7 +1244,7 @@ async function hydrant311(w, sth, e, n) {
     const q = f.geometry && f.geometry.x != null ? [f.geometry.x, f.geometry.y] : (a.Longitude && a.Latitude ? [Number(a.Longitude), Number(a.Latitude)] : null);
     const kind = clean(a.SRType).replace(/^WW-Hydrant\s*/i, '');
     const date = fmt311Date(a.CreatedDate);
-    return q && { q, addr: clean(a.Address), bad: /damag/i.test(kind),
+    return q && { q, addr: titleAddr(clean(a.Address)), bad: /damag/i.test(kind),
       text: `311 report: ${/^open$/i.test(kind) ? 'open / running' : kind.toLowerCase()}${date ? ' since ' + date : ''}` };
   }).filter(Boolean);
 }
@@ -1657,7 +1659,7 @@ async function describeFromCity(pt, inPt) {
   else if (pos === 'detached') text = `${st}single-family (detached)`;
   else text = `${st}building`;
   const yr = Number(prop.YEAR_BUILD);
-  const detail = [clean(prop.FULLADDR), yr > 1700 ? `built ${yr}` : '', clean(prop.PROPDESC), 'from city records · construction not listed']
+  const detail = [titleAddr(clean(prop.FULLADDR)), yr > 1700 ? `built ${yr}` : '', clean(prop.PROPDESC), 'from city records · construction not listed']
     .filter(Boolean).join(' · ');
   return { text: text.charAt(0).toUpperCase() + text.slice(1), detail };
 }
@@ -1696,7 +1698,7 @@ function describeBuilding(a) {
   }
   if (constr && !other && !(constr === 'wood frame' && /rowhouse/.test(text))) text += /single-family$/.test(text) ? `, ${constr}` : ` · ${constr}`;
   const yr = parseInt(a.YEARBLT, 10);
-  const detail = [clean(a.ADDRESS), yr > 1700 ? `built ${yr}` : '', [clean(a.DESCSTYL), clean(a.DESCBLDG), clean(a.DESCCNST)].filter(Boolean).join(' / ')]
+  const detail = [titleAddr(clean(a.ADDRESS)), yr > 1700 ? `built ${yr}` : '', [clean(a.DESCSTYL), clean(a.DESCBLDG), clean(a.DESCCNST)].filter(Boolean).join(' / ')]
     .filter(Boolean).join(' · ');
   return { text: text.charAt(0).toUpperCase() + text.slice(1), detail };
 }
@@ -1771,9 +1773,15 @@ function fitAll() {
 // ============================================================
 // BOTTOM SHEET
 // ============================================================
+// City data comes in ALL CAPS: "2901 W NORTH AVE / BLOOMINGDALE RD" -> "2901 W North Ave / Bloomingdale Rd"
+function titleAddr(a) {
+  return String(a == null ? '' : a).toLowerCase().replace(/[a-z][a-z']*/g, w =>
+    /^[nsew]$/.test(w) ? w.toUpperCase() : /^mc[a-z]/.test(w) ? 'Mc' + w.charAt(2).toUpperCase() + w.slice(3) : w.charAt(0).toUpperCase() + w.slice(1))
+    .replace(/(\d)(St|Nd|Rd|Th)\b/g, (m, d, o) => d + o.toLowerCase());   // 33rd, 1st
+}
 function hydrantText(p) {
-  const loc = clean(p.CAD_ADDR) || [clean(p.STREET_NUM), clean(p.STREET_NAM)].filter(Boolean).join(' ') || clean(p.LOCATION_1) || 'Hydrant';
-  const corner = [clean(p.CORNER_POS), clean(p.CROSS_STRE)].filter(Boolean).join(' corner, cross st ');
+  const loc = titleAddr(clean(p.CAD_ADDR) || [clean(p.STREET_NUM), clean(p.STREET_NAM)].filter(Boolean).join(' ') || clean(p.LOCATION_1)) || 'Hydrant';
+  const corner = [clean(p.CORNER_POS), titleAddr(clean(p.CROSS_STRE))].filter(Boolean).join(' corner, cross st ');
   const extra = [corner, clean(p.LOCATION_D)].filter(Boolean).join(' · ');
   const mainIn = Number(p.SRC_MAIN_S);
   const main = mainIn > 0 ? `${p.SRC_MAIN_S}" main` : '';
@@ -1813,12 +1821,12 @@ function earthUrl() {
 function fmtDate(v) { const d = new Date(Number(v)); return isFinite(d) && v ? d.toLocaleDateString() : ''; }
 function xrayHTML(p) {
   const notes = clean(p.szText);
-  return `<b style="color:#fda4af">${esc(clean(p.szType) || 'Hazard building')}</b><br>${esc(clean(p.szLocation) || [p.nHouseNum, p.szStreet].filter(Boolean).join(' '))}` +
+  return `<b style="color:#fda4af">${esc(clean(p.szType) || 'Hazard building')}</b><br>${esc(titleAddr(clean(p.szLocation) || [p.nHouseNum, p.szStreet].filter(Boolean).join(' ')))}` +
     `${fmtDate(p.ltEntryDate) ? `<br><span style="color:#9aa3b2">Entered ${fmtDate(p.ltEntryDate)}</span>` : ''}` +
     `${notes ? `<br>${esc(notes.length > 240 ? notes.slice(0, 240) + '…' : notes)}` : ''}`;
 }
 function vacantHTML(p) {
-  return `<b>Vacant building notice</b><br>${esc(clean(p.Address))}` +
+  return `<b>Vacant building notice</b><br>${esc(titleAddr(clean(p.Address)))}` +
     `${fmtDate(p.DateNotice) ? `<br><span style="color:#9aa3b2">Notice ${fmtDate(p.DateNotice)}${clean(p.NoticeNum) ? ' · #' + esc(clean(p.NoticeNum)) : ''}</span>` : ''}`;
 }
 function fmtMin(sec) { const m = Math.round(sec / 60); return m < 1 ? '<1 min' : m + ' min'; }
@@ -1890,7 +1898,7 @@ function renderSheet() {
       }) : [];
       const seen = new Set();
       const items = onBlock.map(h => {
-        const where = (clean(h.p.szLocation) || [h.p.nHouseNum, h.p.szStreet].filter(Boolean).join(' ')).split(',')[0];
+        const where = titleAddr((clean(h.p.szLocation) || [h.p.nHouseNum, h.p.szStreet].filter(Boolean).join(' ')).split(',')[0]);
         const t = clean(h.p.szType) || 'Hazard';
         return `${/^DNG$|UNSAFE|DANGER/i.test(t) ? 'DANGEROUS CONDITION' : esc(t.toUpperCase())} at ${esc(where)}`;
       }).filter(x => !seen.has(x) && seen.add(x));
@@ -1900,7 +1908,7 @@ function renderSheet() {
         const t = clean(h.p.szType) || 'Hazard', unsafe = /^DNG$|UNSAFE|DANGER/i.test(t);   // DNG = dangerous condition
         const notes = clean(h.p.szText);
         return `<div class="hyd"><div class="num" style="background:${unsafe ? '#e11d48' : '#e11d48'};color:#fff">${unsafe ? 'D' : 'X'}</div><div>
-          <div class="main">${esc(clean(h.p.szLocation) || [h.p.nHouseNum, h.p.szStreet].filter(Boolean).join(' '))} <span class="tag" style="background:#4c0519;color:#fda4af">${esc(t)}</span><span class="tag">${Math.round(h.ft)} ft</span></div>
+          <div class="main">${esc(titleAddr(clean(h.p.szLocation) || [h.p.nHouseNum, h.p.szStreet].filter(Boolean).join(' ')))} <span class="tag" style="background:#4c0519;color:#fda4af">${esc(t)}</span>${call.label && sameAddr(clean(h.p.szLocation) || [h.p.nHouseNum, h.p.szStreet].filter(Boolean).join(' '), call.label) ? '<span class="tag thisaddr">THIS ADDRESS</span>' : `<span class="tag">${Math.round(h.ft)} ft</span>`}</div>
           ${notes ? `<div class="sub">${esc(notes.length > 140 ? notes.slice(0, 140) + '…' : notes)}</div>` : ''}</div></div>`;
       }).join('') : '<div class="hint">No Code X-Ray, Code X or Unsafe buildings within 600 ft.</div>');
     } else parts.push('<div class="loading">Checking Code X-Ray buildings…</div>');
@@ -1916,7 +1924,7 @@ function renderSheet() {
               else if ((Number(h.p.DateNotice) || 0) > cur.last) cur.last = Number(h.p.DateNotice);
             });
             return [...byAddr.values()].slice(0, 5).map(({ h, last }) => `<div class="hyd"><div class="num" style="background:#16a34a;color:#fff">V</div><div>
-              <div class="main">${esc(clean(h.p.Address))} <span class="tag" style="background:#052e16;color:#86efac">VACANT</span><span class="tag">${Math.round(h.ft)} ft</span></div>
+              <div class="main">${esc(titleAddr(clean(h.p.Address)))} <span class="tag" style="background:#052e16;color:#86efac">VACANT</span>${call.label && sameAddr(clean(h.p.Address), call.label) ? '<span class="tag thisaddr">THIS ADDRESS</span>' : `<span class="tag">${Math.round(h.ft)} ft</span>`}</div>
               ${fmtDate(last) ? `<div class="sub">Most recent notice: ${esc(fmtDate(last))}</div>` : ''}</div></div>`).join('');
           })()
         : '<div class="hint">No open vacant building notices within 300 ft.</div>');
@@ -1961,12 +1969,12 @@ function renderSheet() {
     <div class="lockrow"><div class="lrbox"><span class="lrlbl">Box number</span><b class="lrnum">${boxTxt}</b><small class="lrfd">${house}</small></div><a class="lrsv" href="${streetViewUrl()}" target="_blank" rel="noopener">Street View</a><button id="clearCall">Clear call</button></div>
     ${addrAlert ? `<div class="addralerts">${addrAlert}</div>` : ''}${hazAlert}
     <div class="stats">
-      <div class="stat wide"><span>Building</span><b>${bldgInfoTxt}</b>${bldgInfoSub}</div>
-      <div class="stat wide"><span>Miles and estimated time from ${esc(o ? o.name : '…')}</span><b>${routeTxt}</b></div>
+      <div class="stat"><span>Building</span><b>${bldgInfoTxt}</b>${bldgInfoSub}</div>
+      <div class="stat"><span>From ${esc(o ? o.name : '…')}</span><b>${routeTxt.replace(' · about ', '<br>about ')}</b></div>
     </div>
-    ${dirSection}
     <h3>Nearest hydrants</h3>
     ${hyd}
+    ${dirSection}
     <h3>Code X-Ray and vacant buildings</h3>
     <div class="legend"><span><span class="lgdot" style="background:#e11d48">X</span>Code X / X-Ray</span><span><span class="lgdot" style="background:#e11d48">D</span>Dangerous condition</span><span><span class="lgdot" style="background:#16a34a">V</span>Vacant building</span></div>
     ${haz}
