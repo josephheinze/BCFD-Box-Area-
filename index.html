@@ -541,7 +541,7 @@ function start() {
   map.on('click', e => {
     const t = e.originalEvent && e.originalEvent.target;
     if (t && t.closest && t.closest('.mapboxgl-marker')) return; // tapped a pin; let its popup open
-    const tapLayers = ['area-hydrants', 'xray', 'vacant'].filter(l => map.getLayer(l));
+    const tapLayers = ['area-hydrants', ...hazIds('xray'), ...hazIds('vacant')].filter(l => map.getLayer(l));
     if (tapLayers.length && map.queryRenderedFeatures(e.point, { layers: tapLayers }).length) return;
     if (call) { toast('Call address is locked. Tap ✕ or "Clear call" to pick a new spot.'); return; }
     pickBuildingAt([e.lngLat.lng, e.lngLat.lat]);
@@ -636,22 +636,31 @@ function addOverlays() {
 
   map.addSource('vacant', { type: 'geojson', data: areaVacant });
   map.addSource('xray', { type: 'geojson', data: areaXray });
-  map.addLayer({ id: 'vacant', type: 'circle', source: 'vacant', minzoom: 15.5,
+  // Hazard dots stack straight up on the screen above a fixed spot on each building (X, then D, then V).
+  // Each stack position is its own copy of the layer, shifted up by a set number of pixels.
+  const hazLayer = def => HAZ_UPS.forEach(v => {
+    const l = JSON.parse(JSON.stringify(def)), kind = l.type === 'circle' ? 'circle' : 'text';
+    if (v) l.id += '-u' + v;
+    l.filter = ['==', ['coalesce', ['get', 'up'], 0], v];
+    l.paint = Object.assign({}, l.paint, { [kind + '-translate']: [0, -v], [kind + '-translate-anchor']: 'viewport' });
+    map.addLayer(l);
+  });
+  hazLayer({ id: 'vacant', type: 'circle', source: 'vacant', minzoom: 15.5,
     paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 15.5, 3.5, 18, 7], 'circle-color': '#16a34a',
              'circle-stroke-color': '#fff', 'circle-stroke-width': 1.5 } });
-  map.addLayer({ id: 'vacant-v', type: 'symbol', source: 'vacant', minzoom: 16,
+  hazLayer({ id: 'vacant-v', type: 'symbol', source: 'vacant', minzoom: 16,
     layout: { 'text-field': 'V', 'text-size': ['interpolate', ['linear'], ['zoom'], 16, 7, 18, 9],
               'text-font': ['DIN Pro Bold', 'Arial Unicode MS Bold'], 'text-allow-overlap': true, 'text-ignore-placement': true },
     paint: { 'text-color': '#fff' } });
-  map.addLayer({ id: 'xray', type: 'circle', source: 'xray', minzoom: 14,
+  hazLayer({ id: 'xray', type: 'circle', source: 'xray', minzoom: 14,
     paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 14, 3.5, 18, 7],
              'circle-color': ['case', ['any', ['==', ['upcase', ['to-string', ['get', 'szType']]], 'DNG'], ['in', 'UNSAFE', ['upcase', ['to-string', ['get', 'szType']]]], ['in', 'DANGER', ['upcase', ['to-string', ['get', 'szType']]]]], '#e11d48', '#e11d48'],   // purple = unsafe / dangerous condition
              'circle-stroke-color': '#fff', 'circle-stroke-width': 1.5 } });
-  map.addLayer({ id: 'xray-x', type: 'symbol', source: 'xray', minzoom: 15,
+  hazLayer({ id: 'xray-x', type: 'symbol', source: 'xray', minzoom: 15,
     layout: { 'text-field': ['case', ['any', ['==', ['upcase', ['to-string', ['get', 'szType']]], 'DNG'], ['in', 'UNSAFE', ['upcase', ['to-string', ['get', 'szType']]]], ['in', 'DANGER', ['upcase', ['to-string', ['get', 'szType']]]]], 'D', 'X'], 'text-size': ['interpolate', ['linear'], ['zoom'], 15, 7, 18, 9], 'text-font': ['DIN Pro Bold', 'Arial Unicode MS Bold'], 'text-allow-overlap': true, 'text-ignore-placement': true },
     paint: { 'text-color': '#fff' } });
-  map.on('click', 'xray', e => new mapboxgl.Popup({ offset: 8 }).setLngLat(e.lngLat).setHTML(xrayHTML(e.features[0].properties)).addTo(map));
-  map.on('click', 'vacant', e => new mapboxgl.Popup({ offset: 8 }).setLngLat(e.lngLat).setHTML(vacantHTML(e.features[0].properties)).addTo(map));
+  hazIds('xray').forEach(id => map.on('click', id, e => new mapboxgl.Popup({ offset: 8 }).setLngLat(e.lngLat).setHTML(xrayHTML(e.features[0].properties)).addTo(map)));
+  hazIds('vacant').forEach(id => map.on('click', id, e => new mapboxgl.Popup({ offset: 8 }).setLngLat(e.lngLat).setHTML(vacantHTML(e.features[0].properties)).addTo(map)));
   loadAreaHazards();
 
   map.on('click', 'area-hydrants', e => {
@@ -829,35 +838,84 @@ function nearestOnPolygon(pt, g) {
 
 // One dot per flag per house: repeat records of the same flag on the same spot become one dot.
 // If two different flags share a house (X + V, X + D), the second sits right beside the first so both letters read.
-function showHazards() {
-  const typeOf = f => String((f.properties && f.properties.szType) || 'V').toUpperCase();
-  const dedupe = fc => {
-    const keep = [];
-    fc.features.forEach(f => { if (!keep.some(k => typeOf(k) === typeOf(f) && feetBetween(k.geometry.coordinates, f.geometry.coordinates) < 12)) keep.push(f); });
-    return keep;
-  };
-  const placed = [];
-  const nudge = feats => ({ type: 'FeatureCollection', features: feats.map(f => {
-    const c0 = f.geometry.coordinates;
-    let c = c0;
-    for (const deg of [90, 270, 0, 180]) {                             // one step to a side, never a chain
-      if (!placed.some(q => feetBetween(q, c) < 9)) break;
-      c = offsetFeet(c0, deg, 10);
-    }
-    placed.push(c);
-    return c === c0 ? f : Object.assign({}, f, { geometry: { type: 'Point', coordinates: c } });
-  }) });
-  setData('xray', nudge(dedupe(areaXray)));
-  setData('vacant', nudge(dedupe(areaVacant)));
+// Stack positions in screen pixels: 0 / 15 / 30 on an ordinary building; 34 / 49 / 64 on the call address (above the location pin)
+const HAZ_UPS = [0, 15, 30, 34, 49, 64];
+const hazIds = base => HAZ_UPS.map(v => v ? `${base}-u${v}` : base);
+let areaXrayRaw = { type: 'FeatureCollection', features: [] }, hazBldgs = [];
+const hazAddr = p => clean(p.szLocation) || [p.nHouseNum, p.szStreet].filter(Boolean).join(' ') || clean(p.Address);
+const hazKind = p => p.szType == null ? 'V' : /^DNG$|UNSAFE|DANGER/i.test(String(p.szType)) ? 'D' : 'X';
+// The spot on a building where its dots sit: the front wall facing its own address street, in line with the record
+function hazFront(q, addr) {
+  const core = addrParts(addr).core;
+  let s = null, sd = Infinity;
+  hazFront.along = null;                                         // direction along the front wall, when known
+  if (core && window.map && map.querySourceFeatures) {
+    let roads = [];
+    try { roads = map.querySourceFeatures('composite', { sourceLayer: 'road' }); } catch (e) { /* no road lines yet */ }
+    roads.forEach(f => {
+      if (!f.properties || streetCore(f.properties.name) !== core) return;
+      const g = f.geometry || {}, lines = g.type === 'LineString' ? [g.coordinates] : g.type === 'MultiLineString' ? g.coordinates : [];
+      lines.forEach(ln => { const p = nearestOnPolygon(q, { type: 'Polygon', coordinates: [ln] }); const d = p ? feetBetween(q, p) : Infinity; if (d < sd) { sd = d; s = p; } });
+    });
+    if (sd > 250) s = null;
+  }
+  let b = hazBldgs.find(g => pointInGeo(q, g)) || null;
+  if (!b) { let bd = 60; hazBldgs.forEach(g => { const d = feetToPolygon(q, g); if (d < bd) { bd = d; b = g; } }); }
+  if (b && s) { const w = nearestOnPolygon(s, b); if (w) { hazFront.along = (bearing(w, q) + 90) % 360; return offsetFeet(w, bearing(w, q), 4); } return q; }   // just inside the front wall
+  if (b) { if (pointInGeo(q, b)) return q; const w = nearestOnPolygon(q, b); return w ? offsetFeet(w, bearing(q, w), 4) : q; }   // no street found: onto the roof
+  if (s) return offsetFeet(s, bearing(s, q), Math.min(20, sd * 0.6));
+  return q;
 }
-
+function showHazards() {
+  const groups = new Map();
+  const add = (f, kind) => {
+    const p = f.properties || {}, q = f.geometry.coordinates, addr = hazAddr(p), a = addrParts(addr);
+    const key = a.num && a.core ? `${a.num}|${a.core}|${a.dir || ''}` : 'pt|' + q.map(v => v.toFixed(4)).join(',');
+    if (!groups.has(key)) groups.set(key, { q, addr, kinds: {} });
+    const g = groups.get(key);
+    if (!g.kinds[kind]) g.kinds[kind] = p;                     // one dot per flag per address
+  };
+  areaXrayRaw.features.forEach(f => add(f, hazKind(f.properties || {})));
+  areaVacant.features.forEach(f => add(f, 'V'));
+  const sides = call && callAccess && callAccess.sides;
+  const xs = [], vs = [], bases = [];
+  groups.forEach(g => {
+    const atCall = !!(sides && sides.A && call.label && sameAddr(g.addr, call.label));
+    let base = atCall ? sides.A : hazFront(g.q, g.addr);
+    if (!atCall) {                                               // next-door stacks: step sideways along the wall so they don't overlap
+      const along = hazFront.along != null ? hazFront.along : 90;
+      for (const ft of [12, -12, 24, -24]) { if (!bases.some(c => feetBetween(c, base) < 11)) break; base = offsetFeet(base, along, ft); }
+    }
+    bases.push(base);
+    const ups = atCall ? [34, 49, 64] : [0, 15, 30];
+    ['X', 'D', 'V'].filter(k => g.kinds[k]).forEach((k, i) => {
+      const feat = { type: 'Feature', geometry: { type: 'Point', coordinates: base }, properties: Object.assign({}, g.kinds[k], { up: ups[i] }) };
+      (k === 'V' ? vs : xs).push(feat);
+    });
+  });
+  setData('xray', { type: 'FeatureCollection', features: xs });
+  setData('vacant', { type: 'FeatureCollection', features: vs });
+}
 async function loadAreaHazards() {
   if (!window.map) return;
   const z = map.getZoom(), b = map.getBounds(), box = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()];
-  if (z >= 14) pointsInBox(XRAY_SVC, 0, ...box).then(async f => {
-    areaXray = toFC(z >= 15.5 ? await onRoofs(f) : f); showHazards();   // placed on the roofs before showing (no jumping)
-  }).catch(e => console.error(e));
-  if (z >= 15.5) pointsInBox(VACANT_SVC, 1, ...box).then(f => { areaVacant = toFC(f); showHazards(); }).catch(e => console.error(e));
+  const [x, v] = await Promise.all([
+    z >= 14 ? pointsInBox(XRAY_SVC, 0, ...box).catch(e => { console.error(e); return null; }) : null,
+    z >= 15.5 ? pointsInBox(VACANT_SVC, 1, ...box).catch(e => { console.error(e); return null; }) : null]);
+  if (x) areaXrayRaw = toFC(x);
+  if (v) areaVacant = toFC(v);
+  if (z >= 15.5) {
+    const pts = areaXrayRaw.features.concat(areaVacant.features).map(f => f.geometry.coordinates);
+    if (pts.length) try {
+      const d = await cityQuery(BUILDINGS_LAYER, {
+        geometry: JSON.stringify({ points: pts, spatialReference: { wkid: 4326 } }), geometryType: 'esriGeometryMultipoint',
+        inSR: '4326', spatialRel: 'esriSpatialRelIntersects', distance: '60', units: 'esriSRUnit_Foot',
+        outFields: 'OBJECTID', returnGeometry: 'true', geometryPrecision: '7' });
+      hazBldgs = (d.features || []).filter(f => f.geometry && f.geometry.rings && f.geometry.rings.length).map(f => esriToGeo(f.geometry.rings));
+    } catch (e) { console.error(e); }
+  }
+  showHazards();
+  if (map.once) map.once('idle', showHazards);                 // again once the street lines have loaded
 }
 
 async function loadAreaHydrants() {
@@ -1131,6 +1189,7 @@ function clearCall() {
   callSeq++; call = null; callBox = null; routeGeo = null; nearHydrants = []; window._route = null;
   callAccess = null; callBldgInfo = null; setData('callalley', { type: 'FeatureCollection', features: [] });
   if (callMarker) callMarker.remove(); callMarker = null;
+  showHazards();
   hydMarkers.forEach(m => m.remove()); hydMarkers = [];
   setData('route', { type: 'FeatureCollection', features: [] });
   refreshBoxFilters();
@@ -1629,6 +1688,7 @@ function drawFrontBack() {
   }
   if (callAccess) callAccess.line = fc;
   setData('callalley', fc);
+  showHazards();                                                 // call address dots go above the location pin
 }
 
 // ---------- Building description (Maryland property records, the same data SDAT uses) ----------
