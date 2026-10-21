@@ -83,7 +83,7 @@
     border-top: 1px solid var(--line); border-radius: 16px 16px 0 0; max-height: 50dvh;
     display: flex; flex-direction: column; box-shadow: 0 -6px 20px rgba(0,0,0,.45);
     padding-bottom: env(safe-area-inset-bottom); }
-  #grab { padding: 8px 0 4px; cursor: pointer; flex: none; }
+  #grab { padding: 12px 0 10px; cursor: grab; flex: none; touch-action: none; }   /* bigger handle: tap or slide up / down */
   #grab::before { content: ""; display: block; width: 40px; height: 5px; border-radius: 3px;
     background: #4b5363; margin: 0 auto; }
   #sheetBody { overflow-y: auto; padding: 4px 14px 14px; }
@@ -499,7 +499,35 @@ function start() {
   // Controls first, so search works even if something below fails
   setupOrigin();
   setupSearch();
-  $('grab').onclick = () => $('sheet').classList.toggle('collapsed');
+  // Panel handle: tap to open / close, or slide it down (map fills the screen) and back up (half screen)
+  let grabDrag = null, grabMovedAt = 0;
+  $('grab').onclick = () => { if (Date.now() - grabMovedAt < 250) return; $('sheet').classList.toggle('collapsed'); };
+  $('grab').addEventListener('pointerdown', e => {
+    grabDrag = { y0: e.clientY, dy: 0, moved: false };
+    try { $('grab').setPointerCapture(e.pointerId); } catch (err) { /* older browsers */ }
+  });
+  $('grab').addEventListener('pointermove', e => {
+    if (!grabDrag) return;
+    grabDrag.dy = e.clientY - grabDrag.y0;
+    if (Math.abs(grabDrag.dy) > 6) grabDrag.moved = true;
+    if (!grabDrag.moved) return;
+    const sh = $('sheet'), down = !sh.classList.contains('collapsed');
+    sh.style.transition = 'none';
+    sh.style.transform = `translateY(${down ? Math.max(0, grabDrag.dy) : Math.min(0, Math.max(-40, grabDrag.dy))}px)`;   // follows your finger
+  });
+  const grabEnd = () => {
+    if (!grabDrag) return;
+    const sh = $('sheet'), d = grabDrag;
+    sh.style.transform = ''; sh.style.transition = '';
+    if (d.moved) {
+      grabMovedAt = Date.now();
+      if (d.dy > 40) sh.classList.add('collapsed');          // slid down: map takes the screen
+      else if (d.dy < -40) sh.classList.remove('collapsed'); // slid up: back to half screen
+    }
+    grabDrag = null;
+  };
+  $('grab').addEventListener('pointerup', grabEnd);
+  $('grab').addEventListener('pointercancel', grabEnd);
 
   $('styleBtn').onclick = () => {
     if (!window.map) return;
