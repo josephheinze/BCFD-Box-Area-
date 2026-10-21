@@ -1175,6 +1175,12 @@ async function runRoute() {
         .then(x => x.json()).then(j => (j.routes || [])[0]).catch(() => null)));
     if (seq !== callSeq) return;
     const rt = pickRoute(d.routes.concat(extra.filter(Boolean)));
+    // Which way the rig turns pulling out of quarters: facing out the front toward the street, then the route's first heading
+    const dep = rt.legs && rt.legs[0].steps[0] && rt.legs[0].steps[0].maneuver;
+    if (startDir != null && dep && dep.bearing_after != null) {
+      const turn = signedTurn(bearing([o.lng, o.lat], start), dep.bearing_after);
+      rt.outOfQuarters = turn > 30 ? 'Right' : turn < -30 ? 'Left' : 'Straight';
+    }
     window._route = rt;
     routeGeo = { type: 'Feature', properties: {}, geometry: rt.geometry };
     setData('route', routeGeo);
@@ -1931,8 +1937,11 @@ function renderSheet() {
     }
   }
 
+  const stepText = (s, i) => i === 0 && rt.outOfQuarters
+    ? `${rt.outOfQuarters} out of quarters, then ${s.maneuver.instruction.charAt(0).toLowerCase()}${s.maneuver.instruction.slice(1)}`
+    : s.maneuver.instruction;
   const steps = rt && rt.legs ? rt.legs[0].steps.map((s, i) =>
-    `<div class="step"><div class="num">${i + 1}</div><div class="main">${esc(s.maneuver.instruction)}${s.distance > 0 ? ` <span class="tag">${fmtMi(s.distance)}</span>` : ''}</div></div>`).join('') : '';
+    `<div class="step"><div class="num">${i + 1}</div><div class="main">${esc(stepText(s, i))}${s.distance > 0 ? ` <span class="tag">${fmtMi(s.distance)}</span>` : ''}</div></div>`).join('') : '';
   let dirSection = '';
   if (steps) dirSection = `<h3>Turn-by-turn directions</h3>${steps}`;
   else if (rt === 'loading') dirSection = '<h3>Turn-by-turn directions</h3><div class="loading">Getting directions…</div>';
