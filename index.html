@@ -861,9 +861,18 @@ function hazFront(q, addr) {
   }
   let b = hazBldgs.find(g => pointInGeo(q, g)) || null;
   if (!b) { let bd = 60; hazBldgs.forEach(g => { const d = feetToPolygon(q, g); if (d < bd) { bd = d; b = g; } }); }
-  if (b && s) { const w = nearestOnPolygon(s, b); if (w) { hazFront.along = (bearing(w, q) + 90) % 360; return offsetFeet(w, bearing(w, q), 4); } return q; }   // just inside the front wall
+  if (b && s) {                                                  // halfway back from the front wall, over the house itself
+    const w = nearestOnPolygon(s, b);
+    if (w) {
+      const dir = feetBetween(s, w) > 1 ? bearing(s, w) : bearing(w, q);   // straight in from the street
+      hazFront.along = (dir + 90) % 360;
+      let depth = 0;
+      for (let ft = 2; ft <= 120; ft += 2) { if (pointInGeo(offsetFeet(w, dir, ft), b)) depth = ft; else if (depth) break; }
+      return offsetFeet(w, dir, depth ? Math.min(depth / 2, 30) : 15);
+    }
+    return q;
+  }
   if (b) { if (pointInGeo(q, b)) return q; const w = nearestOnPolygon(q, b); return w ? offsetFeet(w, bearing(q, w), 4) : q; }   // no street found: onto the roof
-  if (s) return offsetFeet(s, bearing(s, q), Math.min(20, sd * 0.6));
   return q;
 }
 function showHazards() {
@@ -906,13 +915,22 @@ async function loadAreaHazards() {
   if (v) areaVacant = toFC(v);
   if (z >= 15.5) {
     const pts = areaXrayRaw.features.concat(areaVacant.features).map(f => f.geometry.coordinates);
-    if (pts.length) try {
-      const d = await cityQuery(BUILDINGS_LAYER, {
-        geometry: JSON.stringify({ points: pts, spatialReference: { wkid: 4326 } }), geometryType: 'esriGeometryMultipoint',
-        inSR: '4326', spatialRel: 'esriSpatialRelIntersects', distance: '60', units: 'esriSRUnit_Foot',
-        outFields: 'OBJECTID', returnGeometry: 'true', geometryPrecision: '7' });
-      hazBldgs = (d.features || []).filter(f => f.geometry && f.geometry.rings && f.geometry.rings.length).map(f => esriToGeo(f.geometry.rings));
-    } catch (e) { console.error(e); }
+    if (pts.length) {
+      const batches = [];
+      for (let i = 0; i < pts.length; i += 12) batches.push(pts.slice(i, i + 12));   // short requests (a long list can be refused)
+      const got = await Promise.all(batches.map(bp => cityQuery(BUILDINGS_LAYER, {
+        geometry: JSON.stringify({ points: bp.map(p => [+p[0].toFixed(6), +p[1].toFixed(6)]), spatialReference: { wkid: 4326 } }),
+        geometryType: 'esriGeometryMultipoint', inSR: '4326', spatialRel: 'esriSpatialRelIntersects', distance: '60', units: 'esriSRUnit_Foot',
+        outFields: 'OBJECTID', returnGeometry: 'true', geometryPrecision: '7' }).catch(e => { console.error(e); return null; })));
+      const seen = new Set(), out = [];
+      got.forEach(d => ((d && d.features) || []).forEach(f => {
+        const id = f.attributes && f.attributes.OBJECTID;
+        if (!f.geometry || !f.geometry.rings || !f.geometry.rings.length || (id != null && seen.has(id))) return;
+        if (id != null) seen.add(id);
+        out.push(esriToGeo(f.geometry.rings));
+      }));
+      if (out.length) hazBldgs = out;
+    }
   }
   showHazards();
   if (map.once) map.once('idle', showHazards);                 // again once the street lines have loaded
