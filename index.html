@@ -1119,6 +1119,7 @@ async function setCall(pt) {
     tapLabel(pt).then(l => { if (seq === callSeq && l) { call.label = l; renderSheet(); } }).catch(() => {});
   loadNearHydrants(seq);
   loadNearHazards(seq);
+  loadWind();
   labelReady.then(() => {                                             // route, A side and building record all use the address
     if (seq !== callSeq) return;
     runRoute(); loadBuildingAndAccess(seq); loadBuildingInfo(seq);
@@ -1249,6 +1250,75 @@ async function hydrant311(w, sth, e, n) {
   }).filter(Boolean);
 }
 
+// Intersection for a hydrant the city lists without one: the street it sits on and the nearest cross street (from the map)
+const shortSt = n => {                       // "North Ellamont Street" -> "N Ellamont St"
+  const t = String(n || '').split(/\s+/).filter(Boolean);
+  if (t.length > 2 && DIRS[t[0].toLowerCase()]) t[0] = DIRS[t[0].toLowerCase()].toUpperCase();
+  const last = SUFFIX[(t[t.length - 1] || '').toLowerCase()];
+  if (t.length > 1 && last) t[t.length - 1] = last.charAt(0).toUpperCase() + last.slice(1);
+  return t.join(' ');
+};
+async function hydrantCross(h) {
+  try {
+    const loc = hydrantText(Object.assign({}, h.p, { _inter: null })).loc;
+    if (/[\/&]/.test(loc)) return null;                                   // already an intersection (city data)
+    const here = [h.lng, h.lat];
+    const info = await roadsAround({ lng: h.lng, lat: h.lat }, 200);
+    const named = info.streets.filter(x => x.c && typeof x.c[0] === 'number' && streetCore(x.p.name));
+    if (!named.length) return null;
+    const own = loc === 'Hydrant' ? null : streetCore(loc);
+    const on = (own && named.find(x => streetCore(x.p.name) === own)) || named[0];
+    const others = named.filter(x => streetCore(x.p.name) !== streetCore(on.p.name));
+    // a cross street runs across the hydrant's street, so it lies along the curb, not straight across the street
+    const toOn = bearing(here, on.c);
+    const crossing = on.ft >= 8 ? others.filter(x => { const g = angleGap(bearing(here, x.c), toOn); return g > 40 && g < 140; }) : others;
+    const cross = crossing[0] || others[0];
+    if (!cross) return null;
+    return { street: shortSt(on.p.name), cross: shortSt(cross.p.name), crossFt: cross.ft, addr: loc === 'Hydrant' ? null : loc };
+  } catch (e) { return null; }
+}
+
+// Wind at the call: latest National Weather Service observation (Baltimore Inner Harbor, then BWI)
+const WIND_STATIONS = [['KDMH', 'Inner Harbor'], ['KBWI', 'BWI']];
+let windObs = null, windAt = 0;
+const comp8 = d => ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'][Math.round((((d % 360) + 360) % 360) / 45) % 8];
+async function loadWind() {
+  if (windObs && !windObs.error && Date.now() - windAt < 10 * 60e3) return;   // reuse for 10 minutes
+  for (const [st, name] of WIND_STATIONS) {
+    try {
+      const r = await fetch(`https://api.weather.gov/stations/${st}/observations/latest`);
+      if (!r.ok) continue;
+      const p = (await r.json()).properties || {};
+      const mph = q => q && q.value != null ? (/m_s-1/.test(q.unitCode || '') ? q.value * 2.23694 : q.value * 0.621371) : null;
+      const spd = mph(p.windSpeed);
+      if (spd == null) continue;
+      const gust = mph(p.windGust), dir = p.windDirection ? p.windDirection.value : null;
+      windObs = { spd: Math.round(spd), gust: gust ? Math.round(gust) : null, dir, name,
+                  ageMin: p.timestamp ? Math.max(0, Math.round((Date.now() - Date.parse(p.timestamp)) / 60000)) : null };
+      windAt = Date.now(); renderSheet(); return;
+    } catch (e) { /* try the next station */ }
+  }
+  windObs = { error: true }; renderSheet();
+}
+
+// Is there a main road (e.g. North Ave) between the building and a hydrant? Uses the map's own road lines.
+const MAIN_ROADS = ['motorway', 'trunk', 'primary', 'secondary'];
+function segCross(a, b, c, d) {
+  const o = (p, q, r) => (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0]);
+  return (o(a, b, c) > 0) !== (o(a, b, d) > 0) && (o(c, d, a) > 0) !== (o(c, d, b) > 0);
+}
+function mainRoadBetween(a, b) {
+  let feats;
+  try { feats = map.querySourceFeatures('composite', { sourceLayer: 'road' }); } catch (e) { return null; }
+  for (const f of feats || []) {
+    const pr = f.properties || {};
+    if (!MAIN_ROADS.includes(pr.class) || pr.structure === 'bridge' || pr.structure === 'tunnel') continue;
+    const g = f.geometry || {}, lines = g.type === 'LineString' ? [g.coordinates] : g.type === 'MultiLineString' ? g.coordinates : [];
+    for (const ln of lines) for (let i = 1; i < ln.length; i++) if (segCross(a, b, ln[i - 1], ln[i])) return pr.name ? shortSt(pr.name) : 'a main road';
+  }
+  return null;
+}
+
 async function loadNearHydrants(seq) {
   const pt = [call.lng, call.lat];
   near311 = [];
@@ -1275,6 +1345,29 @@ async function loadNearHydrants(seq) {
     nearHydrants = { error: e.message || String(e) };
   }
   renderSheet(); fitAll();
+  // flag hydrants across a main road from the building (checked once the map's road lines are loaded)
+  const checkAcross = () => {
+    if (seq !== callSeq || !Array.isArray(nearHydrants) || !call) return;
+    let changed = false;
+    nearHydrants.forEach((h, i) => {
+      const road = mainRoadBetween([call.lng, call.lat], [h.lng, h.lat]);
+      if ((road || null) === (h.p._across || null)) return;
+      h.p._across = road; changed = true;
+      const t = hydrantText(h.p), m = hydMarkers[i];
+      if (m) { const el = m.getElement(); el.classList.toggle('bad', !!t.bad.length); el.classList.toggle('caution', !t.bad.length && !!t.caution.length); if (m.getPopup()) m.getPopup().setHTML(hydrantHTML(h.p)); }
+    });
+    if (changed) renderSheet();
+  };
+  if (window.map) { checkAcross(); if (map.once) map.once('idle', checkAcross); }
+
+  if (Array.isArray(nearHydrants)) nearHydrants.forEach((h, i) => {
+    hydrantCross(h).then(t => {
+      if (seq !== callSeq || !t) return;
+      h.p._inter = t;
+      const m = hydMarkers[i]; if (m && m.getPopup()) m.getPopup().setHTML(hydrantHTML(h.p));
+      renderSheet();
+    });
+  });
 
   // 311 reports: each one goes on the mapped hydrant closest to where it was reported (within 150 ft)
   const reps = await reports;
@@ -1780,9 +1873,18 @@ function titleAddr(a) {
     .replace(/(\d)(St|Nd|Rd|Th)\b/g, (m, d, o) => d + o.toLowerCase());   // 33rd, 1st
 }
 function hydrantText(p) {
-  const loc = titleAddr(clean(p.CAD_ADDR) || [clean(p.STREET_NUM), clean(p.STREET_NAM)].filter(Boolean).join(' ') || clean(p.LOCATION_1)) || 'Hydrant';
+  const it = p._inter;                                            // intersection worked out from the map (no cross street on file)
+  const base = titleAddr(clean(p.CAD_ADDR) || [clean(p.STREET_NUM), clean(p.STREET_NAM)].filter(Boolean).join(' ') || clean(p.LOCATION_1)) || 'Hydrant';
+  const baseSt = base.replace(/^\d+[a-z]?\s+/i, ''), xst = titleAddr(clean(p.CROSS_STRE));
+  // always show it as an intersection: "Street / Cross St"
+  const loc = /[\/&]/.test(base) ? base
+    : it ? `${it.street} / ${it.cross}`
+    : (xst && base !== 'Hydrant') ? `${baseSt} / ${xst}` : base;
+  const atAddr = !/[\/&]/.test(base) && /^\d/.test(base) && loc !== base ? `at ${base}` : '';
   const corner = [clean(p.CORNER_POS), titleAddr(clean(p.CROSS_STRE))].filter(Boolean).join(' corner, cross st ');
-  const extra = [corner, clean(p.LOCATION_D)].filter(Boolean).join(' · ');
+  const near = [atAddr, it && it.crossFt > 60 ? `mid-block, ~${Math.round(it.crossFt / 10) * 10} ft from ${it.cross}` : ''].filter(Boolean).join(' · ');
+  const desc = /^null$/i.test(clean(p.LOCATION_D)) ? '' : clean(p.LOCATION_D);   // the city sometimes stores the word "NULL"
+  const extra = [corner, near, desc].filter(Boolean).join(' · ');
   const mainIn = Number(p.SRC_MAIN_S);
   const main = mainIn > 0 ? `${p.SRC_MAIN_S}" main` : '';
   // Warnings: "bad" ones mean don't count on it; "caution" ones are usable but worth knowing
@@ -1798,6 +1900,7 @@ function hydrantText(p) {
   if (owner === 'BCO') caution.push('County hydrant');
   if (mainIn > 0 && mainIn < 6) caution.push(`Small main (${mainIn}")`);
   (p._311 || []).forEach(r => (r.bad ? bad : caution).push(r.text));
+  if (p._across) caution.push(`Across ${p._across} (main road)`);
   return { loc, extra, main, bad: [...new Set(bad)], caution: [...new Set(caution)], id: clean(p.HYDRANT_ID) };
 }
 function hydrantHTML(p) {
@@ -1958,6 +2061,16 @@ function renderSheet() {
     : i === nSteps - 1 && rt.arriveSide
     ? `Arrive: destination is on the ${rt.arriveSide.side.toUpperCase()}${rt.arriveSide.street ? ` (${rt.arriveSide.compass} side of ${rt.arriveSide.street})` : ''}`
     : s.maneuver.instruction;
+  // Wind line
+  let windTxt = '<b class="loading" style="font-size:15px">checking…</b>';
+  if (windObs && windObs.error) windTxt = '<b style="font-size:14px;color:#fca5a5">Couldn\'t load wind</b>';
+  else if (windObs) {
+    const w = windObs, when = `${w.name}${w.ageMin != null ? `, ${w.ageMin} min ago` : ''}`;
+    windTxt = w.spd < 1 ? `<b>Calm</b><small class="statsub">${esc(when)}</small>`
+      : `<b>From ${w.dir == null ? 'variable' : comp8(w.dir)} ${w.spd} mph${w.gust ? `, gusts ${w.gust}` : ''}</b>` +
+        `<small class="statsub">${w.dir == null ? '' : `Blowing toward ${comp8(w.dir + 180)} · `}${esc(when)}</small>`;
+  }
+
   const steps = rt && rt.legs ? rt.legs[0].steps.map((s, i) =>
     `<div class="step"><div class="num">${i + 1}</div><div class="main">${esc(stepText(s, i))}${s.distance > 0 ? ` <span class="tag">${fmtMi(s.distance)}</span>` : ''}</div></div>`).join('') : '';
   let dirSection = '';
@@ -1971,6 +2084,7 @@ function renderSheet() {
     <div class="stats">
       <div class="stat"><span>Building</span><b>${bldgInfoTxt}</b>${bldgInfoSub}</div>
       <div class="stat"><span>From ${esc(o ? o.name : '…')}</span><b>${routeTxt.replace(' · about ', '<br>about ')}</b></div>
+      <div class="stat wide"><span>Wind</span>${windTxt}</div>
     </div>
     <h3>Nearest hydrants</h3>
     ${hyd}
