@@ -140,6 +140,7 @@
   .addralert.red { background: #450a0a; border: 2px solid #ef4444; color: #fff; }
   .addralert.vac { background: #052e16; border: 2px solid #16a34a; color: #fff; }
   .addralert small { display: block; font-weight: 600; font-size: 11px; color: #fecaca; margin-top: 2px; }
+  .addralert small.xwhen { font-size: 12px; font-weight: 700; color: #fecaca; }
   .addralert small.vacwhen { font-size: 12px; font-weight: 700; color: #bbf7d0; }
   /* Opening screen: department patch with the firehouse picker at the top middle */
   #splash { position: fixed; inset: 0; z-index: 60; display: flex; flex-direction: column; align-items: center;
@@ -1978,7 +1979,7 @@ function renderSheet() {
       const numCls = t.bad.length ? 'num bad' : t.caution.length ? 'num caution' : 'num';
       const warn = t.bad.map(w => `<div class="hwarn bad">⚠ ${esc(w)}</div>`).join('') + t.caution.map(w => `<div class="hwarn caution">⚠ ${esc(w)}</div>`).join('');
       return `<div class="hyd" data-h="${i}"><div class="${numCls}">${i + 1}</div><div>
-        <div class="main">${esc(t.loc)} <span class="tag">${Math.round(h.ft)} ft · ~${lengths} length${lengths > 1 ? 's' : ''}</span>${t.main ? `<span class="tag">${esc(t.main)}</span>` : ''}</div>
+        <div class="main">${esc(t.loc)} <span class="tag">${Math.round(h.ft)} ft · ~${lengths} section${lengths > 1 ? 's' : ''}</span>${t.main ? `<span class="tag">${esc(t.main)}</span>` : ''}</div>
         ${warn}${t.extra ? `<div class="sub">${esc(t.extra)}</div>` : ''}</div></div>`;
     }).join('') : '<div class="hint">No hydrants found within about 3,000 ft.</div>';
     if (near311.length) hyd += near311.map(r =>
@@ -2044,7 +2045,13 @@ function renderSheet() {
       if (!sameAddr(where, callKey)) return;
       const t = clean(h.p.szType) || 'Hazard', dng = /^DNG$|UNSAFE|DANGER/i.test(t);
       const notes = clean(h.p.szText);
-      addrAlert += `<div class="addralert red">⚠ ${dng ? 'DANGEROUS CONDITION' : esc(t.toUpperCase())} — THIS ADDRESS${notes ? `<small>${esc(notes.length > 160 ? notes.slice(0, 160) + '…' : notes)}</small>` : ''}</div>`;
+      // laid out like the vacant alert: title, then "REPORTED ... ON date", then the CAD note
+      const kind = dng ? 'DANGEROUS CONDITION' : /RAY/i.test(t) ? 'CODE X-RAY' : /^(CODE[-\s]?)?X$/i.test(t) ? 'CODE X' : t.toUpperCase();
+      const d = h.p.ltEntryDate ? new Date(Number(h.p.ltEntryDate)) : null;
+      const when = d && isFinite(d) ? `${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}/${d.getFullYear()}` : null;
+      const short = kind === 'DANGEROUS CONDITION' ? 'DANGEROUS' : kind;
+      addrAlert += `<div class="addralert red">⚠ ${esc(kind)} DWELLING<small class="xwhen">${when ? `REPORTED ${esc(short)} ON ${when}` : `REPORTED ${esc(short)} (date not listed)`}</small>` +
+        `${notes ? `<small>${esc(notes.length > 160 ? notes.slice(0, 160) + '…' : notes)}</small>` : ''}</div>`;
     });
     const vacHere = Array.isArray(nearVacant) ? nearVacant.filter(h => sameAddr(clean(h.p.Address), callKey)) : [];
     if (vacHere.length) {
