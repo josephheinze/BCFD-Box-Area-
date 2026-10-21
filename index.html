@@ -1883,7 +1883,7 @@ function hydrantText(p) {
     : (xst && base !== 'Hydrant') ? `${baseSt} / ${xst}` : base;
   const atAddr = !/[\/&]/.test(base) && /^\d/.test(base) && loc !== base ? `at ${base}` : '';
   const corner = [clean(p.CORNER_POS), titleAddr(clean(p.CROSS_STRE))].filter(Boolean).join(' corner, cross st ');
-  const near = [atAddr, it && it.crossFt > 60 ? `mid-block, ~${Math.round(it.crossFt / 10) * 10} ft from ${it.cross}` : ''].filter(Boolean).join(' · ');
+  const near = [atAddr, it && it.crossFt > 60 ? `mid-block, ${Math.round(it.crossFt / 10) * 10} ft from ${it.cross}` : ''].filter(Boolean).join(' · ');
   const desc = /^null$/i.test(clean(p.LOCATION_D)) ? '' : clean(p.LOCATION_D);   // the city sometimes stores the word "NULL"
   const extra = [corner, near, desc].filter(Boolean).join(' · ');
   const mainIn = Number(p.SRC_MAIN_S);
@@ -1979,7 +1979,7 @@ function renderSheet() {
       const numCls = t.bad.length ? 'num bad' : t.caution.length ? 'num caution' : 'num';
       const warn = t.bad.map(w => `<div class="hwarn bad">⚠ ${esc(w)}</div>`).join('') + t.caution.map(w => `<div class="hwarn caution">⚠ ${esc(w)}</div>`).join('');
       return `<div class="hyd" data-h="${i}"><div class="${numCls}">${i + 1}</div><div>
-        <div class="main">${esc(t.loc)} <span class="tag">${Math.round(h.ft)} ft · ~${lengths} section${lengths > 1 ? 's' : ''}</span>${t.main ? `<span class="tag">${esc(t.main)}</span>` : ''}</div>
+        <div class="main">${esc(t.loc)} <span class="tag">${Math.round(h.ft)} ft · ${lengths} section${lengths > 1 ? 's' : ''}</span>${t.main ? `<span class="tag">${esc(t.main)}</span>` : ''}</div>
         ${warn}${t.extra ? `<div class="sub">${esc(t.extra)}</div>` : ''}</div></div>`;
     }).join('') : '<div class="hint">No hydrants found within about 3,000 ft.</div>';
     if (near311.length) hyd += near311.map(r =>
