@@ -1141,10 +1141,10 @@ async function runRoute() {
   window._route = 'loading'; renderSheet();
   try {
     // Aim at the front of the building (the address's own street), not whatever road is nearest the pin
-    let dest = [call.lng, call.lat], destDir = null;
+    let dest = [call.lng, call.lat], destDir = null, destStreet = null;
     try {
       const front = await frontStreet(call);
-      if (front && (front.ft <= 250 || streetCore(front.p.name) === streetCore(call.label))) { dest = front.c; destDir = (bearing(front.c, [call.lng, call.lat]) + 90) % 360; }
+      if (front && (front.ft <= 250 || streetCore(front.p.name) === streetCore(call.label))) { dest = front.c; destDir = (bearing(front.c, [call.lng, call.lat]) + 90) % 360; destStreet = front.p.name; }
     } catch (e) { /* fall back to the pin */ }
     // Leave out the front of the firehouse: start on the street in the firehouse's address (e.g. W North Ave)
     let start = [o.lng, o.lat], startDir = null;
@@ -1180,6 +1180,13 @@ async function runRoute() {
     if (startDir != null && dep && dep.bearing_after != null) {
       const turn = signedTurn(bearing([o.lng, o.lat], start), dep.bearing_after);
       rt.outOfQuarters = turn > 30 ? 'Right' : turn < -30 ? 'Left' : 'Straight';
+    }
+    // Which side of the street the building is on when you arrive: the way you're driving vs. the way to the building
+    const steps0 = rt.legs && rt.legs[0].steps, arr = steps0 && steps0[steps0.length - 1].maneuver;
+    if (destDir != null && arr && arr.type === 'arrive' && arr.bearing_before != null && feetBetween(dest, [call.lng, call.lat]) > 5) {
+      const toBldg = bearing(dest, [call.lng, call.lat]), turn = signedTurn(arr.bearing_before, toBldg);
+      if (Math.abs(turn) > 20 && Math.abs(turn) < 160)
+        rt.arriveSide = { side: turn > 0 ? 'right' : 'left', compass: compass(toBldg), street: destStreet };
     }
     window._route = rt;
     routeGeo = { type: 'Feature', properties: {}, geometry: rt.geometry };
@@ -1937,8 +1944,11 @@ function renderSheet() {
     }
   }
 
+  const nSteps = rt && rt.legs ? rt.legs[0].steps.length : 0;
   const stepText = (s, i) => i === 0 && rt.outOfQuarters
     ? `${rt.outOfQuarters} out of quarters, then ${s.maneuver.instruction.charAt(0).toLowerCase()}${s.maneuver.instruction.slice(1)}`
+    : i === nSteps - 1 && rt.arriveSide
+    ? `Arrive: destination is on the ${rt.arriveSide.side.toUpperCase()}${rt.arriveSide.street ? ` (${rt.arriveSide.compass} side of ${rt.arriveSide.street})` : ''}`
     : s.maneuver.instruction;
   const steps = rt && rt.legs ? rt.legs[0].steps.map((s, i) =>
     `<div class="step"><div class="num">${i + 1}</div><div class="main">${esc(stepText(s, i))}${s.distance > 0 ? ` <span class="tag">${fmtMi(s.distance)}</span>` : ''}</div></div>`).join('') : '';
