@@ -1581,22 +1581,45 @@ const layDone = new Set();
 // Streets only (no alleys, footpaths or parking lots), from the map's own street lines
 const LAY_CLASSES = ['motorway', 'motorway_link', 'trunk', 'trunk_link', 'primary', 'primary_link', 'secondary', 'secondary_link',
   'tertiary', 'tertiary_link', 'street', 'street_limited'];
-function streetGraph() {
+// Street lines from the map's own tiles (backup when the city's street file can't be reached)
+function mapStreetLines() {
   let feats = [];
-  try { feats = map.querySourceFeatures('composite', { sourceLayer: 'road' }); } catch (e) { return null; }
+  try { feats = map.querySourceFeatures('composite', { sourceLayer: 'road' }); } catch (e) { return []; }
+  const out = [];
+  feats.forEach(f => {
+    const pr = f.properties || {};
+    if (!LAY_CLASSES.includes(pr.class) || pr.structure === 'tunnel') return;
+    const g = f.geometry || {};
+    (g.type === 'LineString' ? [g.coordinates] : g.type === 'MultiLineString' ? g.coordinates : []).forEach(ln => out.push(ln));
+  });
+  return out;
+}
+// Street lines from the city's 911 street centerline file around a box (named streets only, no alleys)
+async function cityStreetLines(w, sth, e, n) {
+  const out = [];
+  for (let offset = 0, more = true, pages = 0; more && pages < 5; pages++) {
+    const d = await cityQuery(10, { geometry: [w, sth, e, n].join(','), geometryType: 'esriGeometryEnvelope', inSR: '4326',
+      spatialRel: 'esriSpatialRelIntersects', outFields: 'NAMEFULL,ST_TYP', returnGeometry: 'true', resultOffset: String(offset) });
+    const feats = d.features || [];
+    feats.forEach(f => {
+      const a = f.attributes || {}, name = clean(a.NAMEFULL), typ = clean(a.ST_TYP).toUpperCase();
+      if (!name || /\b(ALLEY|ALY|WALK|PATH|TRL|TRAIL)\b/i.test(name) || ['ALY', 'WALK', 'PATH', 'TRL'].includes(typ)) return;
+      ((f.geometry && f.geometry.paths) || []).forEach(ln => out.push(ln));
+    });
+    offset += feats.length;
+    more = d.exceededTransferLimit && feats.length > 0;
+  }
+  return out;
+}
+function streetGraph(lines) {
   const nodes = new Map(), segs = [];
   const key = p => Math.round(p[0] * 1e5) + ',' + Math.round(p[1] * 1e5);       // ~1 m, so pieces split at tile edges join up
   const node = p => { const k = key(p); if (!nodes.has(k)) nodes.set(k, { p, edges: [] }); return k; };
   const link = (a, b, ft) => { nodes.get(a).edges.push([b, ft]); nodes.get(b).edges.push([a, ft]); };
-  feats.forEach(f => {
-    const pr = f.properties || {};
-    if (!LAY_CLASSES.includes(pr.class) || pr.structure === 'tunnel') return;
-    const g = f.geometry || {}, lines = g.type === 'LineString' ? [g.coordinates] : g.type === 'MultiLineString' ? g.coordinates : [];
-    lines.forEach(ln => { for (let i = 1; i < ln.length; i++) {
-      const a = node(ln[i - 1]), b = node(ln[i]); if (a === b) continue;
-      const ft = feetBetween(ln[i - 1], ln[i]); link(a, b, ft); segs.push([a, b, ln[i - 1], ln[i], ft]);
-    } });
-  });
+  lines.forEach(ln => { for (let i = 1; i < ln.length; i++) {
+    const a = node(ln[i - 1]), b = node(ln[i]); if (a === b) continue;
+    const ft = feetBetween(ln[i - 1], ln[i]); link(a, b, ft); segs.push([a, b, ln[i - 1], ln[i], ft]);
+  } });
   return segs.length ? { nodes, segs } : null;
 }
 // Feet along the streets from point A to point B (each first stepped onto its nearest street); null if not connected
@@ -1635,19 +1658,21 @@ async function hoseLays(seq) {
   if (seq !== callSeq || layDone.has(seq) || !Array.isArray(nearHydrants) || !nearHydrants.length || !callAccess || !callAccess.front) return;
   layDone.add(seq);
   const E = callAccess.front;                                    // where the engine stops
-  const G0 = window.map && map.querySourceFeatures ? streetGraph() : null;
-  await Promise.all(nearHydrants.map(async h => {
-    // first choice: the map's street lines, so the lay always follows the streets
-    const G = G0 && { nodes: new Map([...G0.nodes].map(([k, v]) => [k, { p: v.p, edges: v.edges.slice() }])), segs: G0.segs };   // own copy per hydrant
-    const ft = G ? streetFeet(G, [h.lng, h.lat], E) : null;
-    if (ft != null) { h.ft = ft; return; }
-    try {                                                        // backup: a walking route along the streets
-      const r = await fetch(`https://api.mapbox.com/directions/v5/mapbox/walking/${h.lng},${h.lat};${E[0]},${E[1]}?overview=false&access_token=${MAPBOX_TOKEN}`);
-      const d = await r.json();
-      const m = d && d.routes && d.routes[0] && d.routes[0].distance;
-      if (m != null && isFinite(m)) h.ft = Math.round(m * 3.281);
-    } catch (e) { /* keep the straight-line feet */ }
-  }));
+  // the streets around the engine and all 5 hydrants, plus a margin so corners just outside are included
+  const xs = nearHydrants.map(h => h.lng).concat(E[0]), ys = nearHydrants.map(h => h.lat).concat(E[1]);
+  const m = 0.0025;                                              // about 700 ft
+  let lines = [];
+  try { lines = await cityStreetLines(Math.min(...xs) - m, Math.min(...ys) - m * 0.77, Math.max(...xs) + m, Math.max(...ys) + m * 0.77); } catch (e) { lines = []; }
+  if (seq !== callSeq) return;
+  const sources = [lines, window.map && map.querySourceFeatures ? mapStreetLines() : []].filter(l => l.length);
+  nearHydrants.forEach(h => {
+    h.layStraight = true;
+    for (const src of sources) {                                 // the city's street file first, then the map's
+      const G = streetGraph(src);
+      const ft = G ? streetFeet(G, [h.lng, h.lat], E) : null;
+      if (ft != null) { h.ft = ft; h.layStraight = false; return; }
+    }
+  });
   if (seq !== callSeq || !Array.isArray(nearHydrants)) return;
   nearHydrants.sort((a, b) => a.ft - b.ft);                      // nearest by hose lay
   hydMarkers = nearHydrants.map(h => h.m).filter(Boolean);
@@ -2329,7 +2354,7 @@ function renderSheet() {
       const numCls = t.bad.length ? 'num bad' : t.caution.length ? 'num caution' : 'num';
       const warn = t.bad.map(w => `<div class="hwarn bad">⚠ ${esc(w)}</div>`).join('') + t.caution.map(w => `<div class="hwarn caution">⚠ ${esc(w)}</div>`).join('');
       return `<div class="hyd" data-h="${i}"><div class="${numCls}">${i + 1}</div><div>
-        <div class="main">${esc(t.loc)} <span class="tag">${Math.round(h.ft)} ft · ${lengths} section${lengths > 1 ? 's' : ''}</span>${t.main ? `<span class="tag">${esc(t.main)}</span>` : ''}</div>
+        <div class="main">${esc(t.loc)} <span class="tag">${Math.round(h.ft)} ft · ${lengths} section${lengths > 1 ? 's' : ''}${h.layStraight ? ' (straight line)' : ''}</span>${t.main ? `<span class="tag">${esc(t.main)}</span>` : ''}</div>
         ${warn}${t.extra ? `<div class="sub">${esc(t.extra)}</div>` : ''}</div></div>`;
     }).join('') : '<div class="hint">No hydrants found within about 3,000 ft.</div>';
     if (near311.length) hyd += near311.map(r =>
