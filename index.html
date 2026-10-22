@@ -280,9 +280,9 @@ function fixMedics(name) {
 }
 // "E-46 T-27 A-28" -> "Engine 46 & Truck 27" (same style the city uses for first-due houses)
 function houseLabel(name) {
-  const e = (name.match(/\bE-?(\d+)/i) || [])[1];
+  const e = (name.match(/\bE-?(\d+)/i) || [])[1], sq = (name.match(/\bSQ-?(\d+)/i) || [])[1];
   const trucks = [...name.matchAll(/\bT-?(\d+)/gi)].map(m => 'Truck ' + m[1]);
-  return (e ? ['Engine ' + e] : []).concat(trucks).join(' & ') || name;
+  return (e ? ['Engine ' + e] : sq ? ['Squad ' + sq] : []).concat(trucks).join(' & ') || name;
 }
 
 const DEFAULT_HOUSE = { id: 'E-20', name: 'E-20 T-18 A-8', address: '3130 W. North Ave 21216',
@@ -858,7 +858,9 @@ async function loadBoxes() {
         properties: (() => {
           const engine = (box.split('-')[0] || '').replace(/\D/g, '');
           let house = clean(f.attributes.MapBook);
-          if (QUARTERS_FIXES[engine]) {
+          const rr = ROSTER.find(r => r.engine === engine);       // first due house = that company's current firehouse
+          if (rr) house = houseLabel(rr.units);
+          else if (QUARTERS_FIXES[engine]) {
             const st = stations.find(x => x.engine === engine);
             house = houseLabel(st ? st.name : fixQuarters(engine, house.replace(/Engine\s*/i, 'E-').replace(/Truck\s*/gi, 'T-').replace(/&/g, ' ')));
           }
