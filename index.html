@@ -931,9 +931,16 @@ async function hydrantsInBox(w, sth, e, n) {
 
 // Any city point layer inside [west, south, east, north]
 async function pointsInBox(base, layer, w, sth, e, n) {
-  const d = await cityQuery(layer, { geometry: [w, sth, e, n].join(','), geometryType: 'esriGeometryEnvelope', inSR: '4326',
-    spatialRel: 'esriSpatialRelIntersects', outFields: '*', returnGeometry: 'true' }, base);
-  return (d.features || []).filter(f => f.geometry && isFinite(f.geometry.x) && isFinite(f.geometry.y));
+  let all = [];
+  for (let offset = 0, page = 0; page < 6; page++) {             // the city sends at most ~1,000 at a time: keep asking until it's all in
+    const d = await cityQuery(layer, { geometry: [w, sth, e, n].join(','), geometryType: 'esriGeometryEnvelope', inSR: '4326',
+      spatialRel: 'esriSpatialRelIntersects', outFields: '*', returnGeometry: 'true', resultOffset: String(offset) }, base);
+    const got = d.features || [];
+    all = all.concat(got);
+    if (!d.exceededTransferLimit || !got.length) break;
+    offset += got.length;
+  }
+  return all.filter(f => f.geometry && isFinite(f.geometry.x) && isFinite(f.geometry.y));
 }
 const toFC = feats => ({ type: 'FeatureCollection', features: feats.map(f => ({
   type: 'Feature', geometry: { type: 'Point', coordinates: [f.geometry.x, f.geometry.y] }, properties: f.attributes || {} })) });
@@ -1057,35 +1064,38 @@ function showHazards() {
   setData('xray', { type: 'FeatureCollection', features: xs });
   setData('vacant', { type: 'FeatureCollection', features: vs });
 }
+let areaSeq = 0;
 async function loadAreaHazards() {
   if (!window.map) return;
+  const my = ++areaSeq;                                          // a newer map view replaces this one
   const z = map.getZoom(), b = map.getBounds(), box = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()];
   const [x, v] = await Promise.all([
     z >= 14 ? pointsInBox(XRAY_SVC, 0, ...box).catch(e => { console.error(e); return null; }) : null,
     z >= 15.5 ? pointsInBox(VACANT_SVC, 1, ...box).catch(e => { console.error(e); return null; }) : null]);
+  if (my !== areaSeq) return;                                    // the map moved again; that newer load will draw
   if (x) areaXrayRaw = toFC(x);
   if (v) areaVacant = toFC(v);
-  if (z >= 15.5) {
-    const pts = areaXrayRaw.features.concat(areaVacant.features).map(f => f.geometry.coordinates);
-    if (pts.length) {
-      const batches = [];
-      for (let i = 0; i < pts.length; i += 12) batches.push(pts.slice(i, i + 12));   // short requests (a long list can be refused)
-      const got = await Promise.all(batches.map(bp => cityQuery(BUILDINGS_LAYER, {
-        geometry: JSON.stringify({ points: bp.map(p => [+p[0].toFixed(6), +p[1].toFixed(6)]), spatialReference: { wkid: 4326 } }),
-        geometryType: 'esriGeometryMultipoint', inSR: '4326', spatialRel: 'esriSpatialRelIntersects', distance: '60', units: 'esriSRUnit_Foot',
-        outFields: 'OBJECTID', returnGeometry: 'true', geometryPrecision: '7' }).catch(e => { console.error(e); return null; })));
-      const seen = new Set(), out = [];
-      got.forEach(d => ((d && d.features) || []).forEach(f => {
-        const id = f.attributes && f.attributes.OBJECTID;
-        if (!f.geometry || !f.geometry.rings || !f.geometry.rings.length || (id != null && seen.has(id))) return;
-        if (id != null) seen.add(id);
-        out.push(esriToGeo(f.geometry.rings));
-      }));
-      if (out.length) hazBldgs = out;
-    }
-  }
-  showHazards();
-  if (map.once) map.once('idle', showHazards);                 // again once the street lines have loaded
+  showHazards();                                                 // show the dots right away
+  if (map.once) map.once('idle', () => { if (my === areaSeq) showHazards(); });   // again once the street lines are in
+  // then, when zoomed in close enough to matter, look up building outlines so dots sit on the roofs
+  const pts = areaXrayRaw.features.concat(areaVacant.features).map(f => f.geometry.coordinates)
+    .filter(p => p[0] >= box[0] && p[0] <= box[2] && p[1] >= box[1] && p[1] <= box[3]);
+  if (z < 16 || !pts.length || pts.length > 240) return;
+  const batches = [];
+  for (let i = 0; i < pts.length; i += 12) batches.push(pts.slice(i, i + 12));   // short requests (a long list can be refused)
+  const got = await Promise.all(batches.map(bp => cityQuery(BUILDINGS_LAYER, {
+    geometry: JSON.stringify({ points: bp.map(p => [+p[0].toFixed(6), +p[1].toFixed(6)]), spatialReference: { wkid: 4326 } }),
+    geometryType: 'esriGeometryMultipoint', inSR: '4326', spatialRel: 'esriSpatialRelIntersects', distance: '60', units: 'esriSRUnit_Foot',
+    outFields: 'OBJECTID', returnGeometry: 'true', geometryPrecision: '7' }).catch(e => { console.error(e); return null; })));
+  if (my !== areaSeq) return;
+  const seen = new Set(), out = [];
+  got.forEach(d => ((d && d.features) || []).forEach(f => {
+    const id = f.attributes && f.attributes.OBJECTID;
+    if (!f.geometry || !f.geometry.rings || !f.geometry.rings.length || (id != null && seen.has(id))) return;
+    if (id != null) seen.add(id);
+    out.push(esriToGeo(f.geometry.rings));
+  }));
+  if (out.length) { hazBldgs = out; showHazards(); }
 }
 
 async function loadAreaHydrants() {
