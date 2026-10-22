@@ -1,0 +1,2224 @@
+<!doctype html>
+<!--
+  Box Response Map
+  Copyright (c) 2026 Joseph Heinze. All rights reserved.
+  No part of this app's code, design or layout may be copied, reused, modified or redistributed without written permission.
+  Unofficial app. Not a product of, or endorsed by, the Baltimore City Fire Department or the City of Baltimore.
+  Map and building data belong to their sources (Baltimore City, State of Maryland, Baltimore 311, Mapbox).
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="author" content="Joseph Heinze">
+<meta name="copyright" content="Copyright (c) 2026 Joseph Heinze. All rights reserved.">
+<meta name="robots" content="noindex, nofollow">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Box Response">
+<meta name="theme-color" content="#111317">
+<title>Box Response Map</title>
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" type="image/png" href="icon-512.png">
+<link rel="manifest" href="manifest.webmanifest">
+<link href="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.css" rel="stylesheet">
+<script src="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.js"></script>
+<style>
+  :root {
+    --bg: #111317;
+    --panel: rgba(22, 25, 31, 0.96);
+    --panel-solid: #16191f;
+    --line: #2a2f39;
+    --text: #f2f4f7;
+    --muted: #9aa3b2;
+    --accent: #ef4444;      /* call / box lines */
+    --mine: #f59e0b;        /* your first-due boxes */
+    --hydrant: #fb923c;
+    --route: #38bdf8;
+    --ok: #22c55e;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font: 15px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; overflow: hidden; }
+  #map { position: absolute; inset: 0; }
+  /* Compass rose, bottom-left of the map (turns with the map so N always points north) */
+  #compass { position: fixed; left: 12px; bottom: 120px; width: 64px; height: 64px; z-index: 9; pointer-events: none;
+    filter: drop-shadow(0 1px 3px rgba(0,0,0,.7)); }
+  #compass svg { width: 100%; height: 100%; display: block; }
+
+  /* ---------- Top bar ---------- */
+  #topbar { position: fixed; top: 0; left: 0; right: 0; z-index: 10;
+    padding: calc(env(safe-area-inset-top) + 10px) 10px 10px; pointer-events: none; }
+  #topbar > * { pointer-events: auto; }
+  .search { display: flex; background: var(--panel); border: 1px solid var(--line);
+    border-radius: 12px; overflow: hidden; box-shadow: 0 4px 16px rgba(0,0,0,.4); }
+  .search input { flex: 1; min-width: 0; border: 0; background: transparent; color: var(--text);
+    font-size: 17px; padding: 13px 14px; outline: none; }
+  .search input::placeholder { color: var(--muted); }
+  .search button { border: 0; background: transparent; color: var(--muted); font-size: 22px;
+    width: 46px; cursor: pointer; }
+  .search button.paste { width: auto; padding: 0 12px; color: var(--text); font-size: 15px; border-left: 1px solid var(--line); }
+  .search button.go { width: auto; padding: 0 16px; background: #ef4444; color: #fff; font-size: 15px; font-weight: 700; }
+  #suggest { margin-top: 6px; background: var(--panel-solid); border: 1px solid var(--line);
+    border-radius: 12px; overflow: hidden; display: none; box-shadow: 0 6px 20px rgba(0,0,0,.5); }
+  #suggest div { padding: 12px 14px; border-bottom: 1px solid var(--line); cursor: pointer; }
+  #suggest div:last-child { border-bottom: 0; }
+  #suggest div:active, #suggest div:hover { background: #222733; }
+  #suggest small { color: var(--muted); display: block; }
+  .row { display: flex; gap: 8px; margin-top: 8px; align-items: center; }
+  .row select, .row button { background: var(--panel); color: var(--text); border: 1px solid var(--line);
+    border-radius: 10px; padding: 9px 10px; font-size: 14px; }
+  .row select { flex: 1; min-width: 0; }
+  .row button { cursor: pointer; white-space: nowrap; padding: 9px 8px; font-size: 13px; }
+
+  /* ---------- Banner ---------- */
+  #banner { display: none; position: fixed; left: 10px; right: 10px; z-index: 20;
+    top: calc(env(safe-area-inset-top) + 118px); background: #7f1d1d; border: 1px solid var(--accent);
+    color: #fff; padding: 10px 12px; border-radius: 10px; font-size: 13px; }
+  #banner a { color: #fecaca; }
+
+  /* ---------- Bottom sheet ---------- */
+  #sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 10; background: var(--panel);
+    border-top: 1px solid var(--line); border-radius: 16px 16px 0 0; max-height: 50dvh;
+    display: flex; flex-direction: column; box-shadow: 0 -6px 20px rgba(0,0,0,.45);
+    padding-bottom: env(safe-area-inset-bottom); }
+  #grab { padding: 12px 0 10px; cursor: grab; flex: none; touch-action: none; }   /* bigger handle: tap or slide up / down */
+  #grab::before { content: ""; display: block; width: 40px; height: 5px; border-radius: 3px;
+    background: #4b5363; margin: 0 auto; }
+  #sheetBody { overflow-y: auto; padding: 4px 14px 14px; }
+  #sheet.collapsed #sheetBody { display: none; }
+  @media (min-width: 820px) {
+    #sheet { left: 10px; right: auto; width: 390px; bottom: 10px; border-radius: 14px;
+      border: 1px solid var(--line); max-height: calc(100dvh - 150px); }
+    #topbar { right: auto; width: 410px; }
+    #banner { right: auto; width: 390px; }
+  }
+  .hint { color: var(--muted); padding: 6px 0 4px; }
+  .addr { font-size: 24px; font-weight: 800; line-height: 1.2; margin: 2px 0 10px; }
+  .stats { display: grid; grid-template-columns: 3fr 2fr; gap: 8px; }
+  .tag.thisaddr { background: rgba(253,224,71,.22); color: #fde047; font-weight: 800; }
+  .stat { background: #1d212a; border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; }
+  .stat span { display: block; font-size: 12.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: #cbd5e1; }
+  .stat b { font-size: 16px; }
+  .stat.wide { grid-column: 1 / -1; }
+  .stat.box b { font-size: 24px; color: var(--mine); }
+  .stat.boxcard { padding: 5px 10px; }
+  .boxrow { display: flex; align-items: center; gap: 10px; margin-top: 0; }
+  .stat .boxnum { font-size: 22px; color: var(--mine); line-height: 1.1; white-space: nowrap; }
+  .fd { font-size: 15px; font-weight: 700; line-height: 1.2; display: flex; flex-direction: column; gap: 4px; }
+  .stat .tag { width: fit-content; }
+  #toast { position: fixed; left: 50%; transform: translateX(-50%); top: calc(env(safe-area-inset-top) + 120px); z-index: 25;
+    background: #111827; border: 1px solid #4b5563; color: #fff; padding: 10px 14px; border-radius: 10px; font-size: 14px;
+    font-weight: 600; box-shadow: 0 4px 14px rgba(0,0,0,.5); display: none; max-width: 90vw; text-align: center; }
+  .lockrow { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 8px; margin: -4px 0 10px; }
+  .lockrow .lrbox { justify-self: start; min-width: 0; }
+  .lockrow .lrlbl { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+  .lockrow .lrnum { display: block; font-size: 22px; color: var(--mine); line-height: 1.1; white-space: nowrap; }
+  .lockrow .lrfd { display: block; font-size: 11px; font-weight: 600; color: var(--text); line-height: 1.2; }
+  .addrrow { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+  .addrrow .lrlock { color: var(--muted); font-size: 13px; white-space: nowrap; margin-top: 8px; }
+  .lockrow .lrsv { justify-self: center; text-align: center; text-decoration: none; background: #ffffff; border: 1px solid #d1d5db; color: #111;
+    font-weight: 700; border-radius: 10px; padding: 10px 14px; font-size: 14px; white-space: nowrap; }
+  .lockrow #clearCall { justify-self: end; }
+  .lockrow span { color: var(--muted); font-size: 13px; }
+  .lockrow button { background: #1d212a; color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; font-size: 13px; cursor: pointer; }
+  .lockrow #clearCall { background: #ffffff; color: #111; border-color: #d1d5db; font-weight: 700; font-size: 15px; padding: 8px 14px; }
+  .vdot { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; background: #16a34a; color: #fff;
+    font-size: 11px; font-weight: 800; border: 1px solid #fff; margin-right: 2px; }
+  .walk { font-size: 15px; font-weight: 600; margin-top: 6px; }
+  .gbtns { margin: 0 0 10px; }
+  .btns.gbtns a { background: #ffffff; border-color: #d1d5db; color: #111; font-weight: 700; }   /* Street View / Apple Maps / Google Maps: white (dark text so it reads) */
+  .statsub { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .num.bad { background: #ef4444; color: #fff; }
+  .num.caution { background: var(--hydrant); color: #111; box-shadow: 0 0 0 3px #fde047; }
+  .hwarn { font-size: 13px; font-weight: 700; margin-top: 2px; }
+  .hwarn.bad { color: #f87171; }
+  .hwarn.caution { color: #fbbf24; }
+  .warnbar { border-radius: 10px; padding: 8px 10px; margin: 4px 0 8px; font-weight: 700; font-size: 14px; }
+  .warnbar.bad { background: #450a0a; border: 1px solid #ef4444; }
+  /* Alert when the call address itself is Code X / X-Ray, dangerous condition, or vacant */
+  .addralerts { display: flex; gap: 6px; margin: 0 0 8px; }
+  .addralert { flex: 1 1 0; min-width: 0; border-radius: 10px; padding: 6px 8px; font-weight: 800; font-size: 13px; line-height: 1.25; }
+  .addralert.red { background: #450a0a; border: 2px solid #ef4444; color: #fff; }
+  .addralert.vac { background: #052e16; border: 2px solid #16a34a; color: #fff; }
+  .addralert small { display: block; font-weight: 600; font-size: 11px; color: #fecaca; margin-top: 2px; }
+  .addralert small.xwhen { font-size: 12px; font-weight: 700; color: #fecaca; }
+  .addralert small.vacwhen { font-size: 12px; font-weight: 700; color: #bbf7d0; }
+  /* Opening screen: department patch with the firehouse picker at the top middle */
+  #splash { position: fixed; inset: 0; z-index: 60; display: flex; flex-direction: column; align-items: center;
+    background: radial-gradient(circle at 50% 50%, #b81d0b 0%, #7a1005 45%, #2e0300 100%);
+    padding: calc(env(safe-area-inset-top) + 18px) 16px calc(env(safe-area-inset-bottom) + 16px); }
+  #splash.gone { display: none; }
+  #splashPick { width: min(92vw, 440px); font-size: 18px; font-weight: 700; padding: 14px 12px; border-radius: 12px;
+    background: #111; color: #fff; border: 2px solid #fff; }
+  #splashNote { width: min(92vw, 440px); margin-top: 12px; color: rgba(255,255,255,.88); font-size: 12.5px; line-height: 1.45; text-align: center; }
+  #splashNote b { color: #fff; }
+  #splash img { width: 260px; max-width: 80vw; margin: auto 0;
+    -webkit-mask-image: radial-gradient(circle, #000 60%, transparent 74%); mask-image: radial-gradient(circle, #000 60%, transparent 74%); }
+  .hyd-pin.bad { background: #ef4444; color: #fff; }
+  .hyd-pin.caution { box-shadow: 0 0 0 3px #fde047; }
+  .btns { display: flex; gap: 8px; margin: 10px 0 4px; }
+  .btns a { flex: 1; text-align: center; text-decoration: none; color: var(--text); background: #1d212a;
+    border: 1px solid var(--line); border-radius: 10px; padding: 10px; font-size: 14px; }
+  h3 { font-size: 14px; font-weight: 800; text-transform: uppercase; letter-spacing: .05em; color: #e5e7eb; margin: 18px 0 6px; padding-bottom: 4px; border-bottom: 1px solid var(--line); }
+  .legend { display: flex; justify-content: space-between; align-items: center; gap: 6px; flex-wrap: nowrap; margin: 2px 0 8px;
+    font-size: clamp(8.5px, 2.9vw, 12px); color: #cbd5e1; white-space: nowrap; }
+  .legend > span { display: inline-flex; align-items: center; gap: 4px; }
+  .lgdot { display: inline-grid; place-items: center; width: 15px; height: 15px; border-radius: 50%; color: #fff; font-size: 9px; font-weight: 800; border: 1px solid #fff; flex: none; }
+  @media (max-width: 340px) { .legend { gap: 3px; } .lgdot { width: 13px; height: 13px; font-size: 8px; } }
+  .hyd[data-h] .tag { font-size: 13px; font-weight: 700; color: #e5e7eb; padding: 2px 7px; margin-top: 3px; }   /* hydrant feet / hose lengths / main size */
+  .vachead { font-size: 14px; font-weight: 800; color: #e5e7eb; margin: 12px 0 2px; }
+  .hyd { display: flex; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line); cursor: pointer; }
+  .hyd:last-child { border-bottom: 0; }
+  .num { flex: none; width: 26px; height: 26px; border-radius: 50%; background: var(--hydrant); color: #111;
+    font-weight: 800; display: grid; place-items: center; font-size: 13px; }
+  .hyd .main { font-weight: 600; }
+  .hyd .sub { color: var(--muted); font-size: 13px; }
+  .tag { display: inline-block; font-size: 11px; padding: 1px 6px; border-radius: 6px; background: #2a2f39; color: var(--muted); margin-left: 4px; }
+  .step { display: flex; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line); align-items: flex-start; }
+  .step:last-child { border-bottom: 0; }
+  .step .num { background: #ffffff; color: #082f49; }
+  .step .main { font-weight: 600; }
+  .fine { color: var(--muted); font-size: 12px; margin-top: 14px; }
+  .loading { color: var(--muted); font-style: italic; }
+
+  /* ---------- Map markers ---------- */
+  .call-pin { width: 15px; height: 15px; border-radius: 50% 50% 50% 0; background: #ffffff;
+    transform: rotate(-45deg); border: 3px solid #fff; box-shadow: 0 2px 6px rgba(0,0,0,.5); }
+  .call-pin::after { content: ""; position: absolute; left: 50%; top: 50%; width: 5px; height: 5px; margin: -2.5px 0 0 -2.5px; border-radius: 50%; background: #000; }
+  .hyd-pin { width: 17px; height: 17px; border-radius: 50%; background: var(--hydrant); color: #111;
+    border: 1.5px solid #111; font: 800 9px/14px sans-serif; text-align: center; box-shadow: 0 1px 4px rgba(0,0,0,.6); }   /* same size as the X / D / V dots */
+  .mapboxgl-popup-content { background: var(--panel-solid); color: var(--text); border-radius: 10px; font-size: 13px; }
+  .mapboxgl-popup-tip { border-top-color: var(--panel-solid) !important; border-bottom-color: var(--panel-solid) !important; }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div id="compass" aria-label="Compass"><svg viewBox="0 0 100 100">
+  <circle cx="50" cy="50" r="47" fill="rgba(17,19,23,.72)" stroke="#fff" stroke-width="2"/>
+  <polygon points="50,24 56,50 50,76 44,50" fill="#fff"/>
+  <polygon points="50,24 56,50 44,50" fill="#e11d48"/>
+  <polygon points="24,50 50,44 76,50 50,56" fill="#9aa3b2"/>
+  <circle cx="50" cy="50" r="3.5" fill="#111" stroke="#fff" stroke-width="1.5"/>
+  <text x="50" y="21" text-anchor="middle" font-size="19" font-weight="900" fill="#f87171" font-family="sans-serif">N</text>
+  <text x="50" y="94" text-anchor="middle" font-size="18" font-weight="800" fill="#fff" font-family="sans-serif">S</text>
+  <text x="87" y="56.5" text-anchor="middle" font-size="18" font-weight="800" fill="#fff" font-family="sans-serif">E</text>
+  <text x="13" y="56.5" text-anchor="middle" font-size="18" font-weight="800" fill="#fff" font-family="sans-serif">W</text>
+</svg></div>
+
+<div id="topbar">
+  <div class="search">
+    <input id="q" type="search" placeholder="Call address, e.g. 2900 W North Ave" autocomplete="off" enterkeyhint="search">
+    <button id="clear" aria-label="Clear">&times;</button>
+    <button id="paste" class="paste">Paste</button>
+    <button id="go" class="go">Search</button>
+  </div>
+  <div id="suggest"></div>
+  <div class="row">
+    <select id="origin" aria-label="Responding from"></select>
+    <button id="styleBtn">Dark map</button>
+  </div>
+</div>
+
+<div id="banner"></div>
+<div id="toast"></div>
+<div id="splash"><select id="splashPick" aria-label="Choose your location"><option value="">Loading firehouses…</option></select><img alt="Baltimore City Fire Service" src="data:image/jpeg;base64,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"><div id="splashNote"><b>Unofficial app — not a Baltimore City Fire Department product</b> and not endorsed by the department or the City of Baltimore. For reference only; always go by dispatch and your unit's terminal. Map and building data come from Baltimore City, the State of Maryland, Baltimore 311 and Mapbox, and may be out of date or wrong.<br><b>© 2026. All rights reserved.</b> Do not copy, reuse or redistribute without written permission.</div></div>
+
+<!-- Shown only if the app's code never runs (e.g. a phone's file preview). The script removes it at startup. -->
+<div id="nojs" style="position:fixed;inset:auto 12px 40% 12px;z-index:30;background:#7f1d1d;border:1px solid #ef4444;color:#fff;padding:14px;border-radius:12px;font-size:15px;line-height:1.45">
+  <b>The app isn't running here.</b><br>
+  You're seeing a preview that doesn't run apps. Open this file in Safari, Chrome, Edge or Firefox on a computer, or open it from a web link (like Netlify) on your phone.
+</div>
+
+<div id="sheet">
+  <div id="grab" aria-label="Show or hide details"></div>
+  <div id="sheetBody">
+    <div class="hint">Search a call address, or tap the building on the map.</div>
+  </div>
+</div>
+
+<script>
+(function () { var n = document.getElementById('nojs'); if (n) n.parentNode.removeChild(n); })();
+// ============================================================
+// SETTINGS
+// ============================================================
+const MAPBOX_TOKEN = 'pk.eyJ1Ijoiam9zZXBoaGVpbnplIiwiYSI6ImNtdjE1czBheDAyYWgyd3BzbjJrY3NpNmsifQ.gc6gMdQHobBCjJaFK2HTGw';
+
+// Baltimore City's public 911-CAD map layers
+const CITY = 'https://egisdata.baltimorecity.gov/egis/rest/services/911/BaltCity_911_RapidDeploy_layers/MapServer';
+const LAYER = { stations: 0, hydrants: 3, boxes: 12 };
+const AREA_FIELD = 'AddressDB.EGISDATA.Fire_RDs.Area';
+const CITY_BBOX = [-76.72, 39.19, -76.52, 39.38];
+// ============================================================
+// FIREHOUSE CORRECTIONS (the city's map data can lag behind real moves)
+// Key = engine number of the quarters. remove/add = unit names like 'T-27', 'A-28'.
+// ============================================================
+const QUARTERS_FIXES = {
+  '45':  { remove: ['T-27'] },                    // T-27 moved out of E-45's quarters...
+  '46':  { add: ['T-27', 'A-28'] },               // ...to E-46's, along with A-28
+  '124': { remove: ['E-124'], add: ['A-29'] }     // T-20's quarters: delete E-124 (doesn't exist), add A-29
+};
+function fixQuarters(engine, name) {
+  const fix = QUARTERS_FIXES[engine];
+  if (!fix) return name;
+  let units = name.replace(/,/g, ' ').split(/\s+/).filter(Boolean);
+  const norm = u => u.toUpperCase().replace(/\s+/g, '');
+  const gone = (fix.remove || []).map(norm);
+  units = units.filter(u => !gone.includes(norm(u)));
+  (fix.add || []).forEach(u => { if (!units.some(x => norm(x) === norm(u))) units.push(u); });
+  // keep a sensible order: engine, trucks, then everything else as listed
+  const rank = u => /^E-/i.test(u) ? 0 : /^T-/i.test(u) ? 1 : 2;
+  return units.map((u, i) => [u, i]).sort((a, b) => rank(a[0]) - rank(b[0]) || a[1] - b[1]).map(x => x[0]).join(' ');
+}
+// Current medic (M) vs ambulance (A) units, from the department's unit list.
+// The city's map data can be behind, so each M-/A- unit gets the letter from this list.
+const UNIT_LETTER = { 1: 'M', 2: 'M', 3: 'A', 4: 'M', 5: 'M', 6: 'M', 7: 'M', 8: 'A', 9: 'M', 10: 'M', 11: 'M', 12: 'M', 13: 'M',
+  14: 'M', 15: 'M', 16: 'M', 17: 'M', 18: 'M', 19: 'A', 20: 'A', 21: 'M', 22: 'A', 23: 'A', 24: 'A', 25: 'A', 26: 'A', 27: 'A', 28: 'A', 30: 'A' };
+function fixMedics(name) {
+  return name.replace(/\b[MA]-?(\d+)\b/g, (u, n) => UNIT_LETTER[n] ? UNIT_LETTER[n] + '-' + n : u);
+}
+// "E-46 T-27 A-28" -> "Engine 46 & Truck 27" (same style the city uses for first-due houses)
+function houseLabel(name) {
+  const e = (name.match(/\bE-?(\d+)/i) || [])[1];
+  const trucks = [...name.matchAll(/\bT-?(\d+)/gi)].map(m => 'Truck ' + m[1]);
+  return (e ? ['Engine ' + e] : []).concat(trucks).join(' & ') || name;
+}
+
+const DEFAULT_HOUSE = { id: 'E-20', name: 'E-20 T-18 A-8', address: '3130 W. North Ave 21216',
+                        lng: -76.670566868816607, lat: 39.309237721872378 };
+// Fire Dept hazard buildings (CODE-X / X-RAY / UNSAFE) from the 911-CAD system, and DHCD open vacant building notices
+const XRAY_SVC = 'https://baltegis.baltimorecity.gov/mapping/rest/services/911/Fire_CODEX_XRAY_UNSAFE_Building_ALT/MapServer';
+const VACANT_SVC = 'https://egisdata.baltimorecity.gov/egis/rest/services/Housing/DHCD_Open_Baltimore_Datasets/FeatureServer';
+const HOSE_LENGTH_FT = 50;                 // used for the "about N lengths" hydrant estimate
+// Backup copy of the same hydrant data, published by the city as a separate service
+const HYDRANT_BACKUP = 'https://gisdata.baltimorecity.gov/egis/rest/services/CAD911/Hydrants_City/FeatureServer';
+const HYDRANT_FIELDS = 'HYDRANT_ID,CAD_ADDR,STREET_NUM,STREET_NAM,CROSS_STRE,CORNER_POS,LOCATION_D,LOCATION_1,SRC_MAIN_S,FEAT_STATU,CONDITION';
+// Open 311 hydrant reports (residents report broken hydrants to 311; the city posts them daily)
+const SR311 = 'https://services1.arcgis.com/UWYHeuuJISiGmgXx/ArcGIS/rest/services/311_Customer_Service_Requests_current/FeatureServer';
+const SR311_TYPES = ['WW-Hydrant Damaged', 'WW-Hydrant Leaking', 'WW-Hydrant Open'];
+const STYLES = { dark: 'mapbox://styles/mapbox/dark-v11', sat: 'mapbox://styles/mapbox/satellite-streets-v12' };
+
+// Any unexpected error shows on screen so it can be reported
+window.addEventListener('error', e => { try { showBanner('<strong>Something went wrong:</strong> ' + esc(e.message || e)); } catch (x) {} });
+window.addEventListener('unhandledrejection', e => { try { showBanner('<strong>Something went wrong:</strong> ' + esc((e.reason && e.reason.message) || e.reason)); } catch (x) {} });
+
+// ============================================================
+// SMALL HELPERS
+// ============================================================
+const $ = id => document.getElementById(id);
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const clean = s => (s == null ? '' : String(s)).trim();
+function showBanner(html) { const b = $('banner'); b.innerHTML = html; b.style.display = 'block'; }
+function store(key, val) { try { if (val === undefined) return localStorage.getItem(key); localStorage.setItem(key, val); } catch (e) { return null; } }
+
+/*GEO-START*/
+// Distance in feet between two [lng, lat] points
+function feetBetween(a, b) {
+  const R = 20902231; // earth radius in feet
+  const toRad = d => d * Math.PI / 180;
+  const dLat = toRad(b[1] - a[1]), dLng = toRad(b[0] - a[0]);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(a[1])) * Math.cos(toRad(b[1])) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+function isClockwise(ring) {
+  let s = 0;
+  for (let i = 0; i < ring.length - 1; i++) s += (ring[i + 1][0] - ring[i][0]) * (ring[i + 1][1] + ring[i][1]);
+  return s > 0;
+}
+function pointInRing(pt, ring) {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [xi, yi] = ring[i], [xj, yj] = ring[j];
+    if (((yi > pt[1]) !== (yj > pt[1])) && (pt[0] < (xj - xi) * (pt[1] - yi) / (yj - yi) + xi)) inside = !inside;
+  }
+  return inside;
+}
+// ArcGIS polygon rings -> GeoJSON Polygon / MultiPolygon (clockwise = outer, counter-clockwise = hole)
+function esriToGeo(rings) {
+  const polys = [], holes = [];
+  rings.forEach(r => (isClockwise(r) ? polys.push([r]) : holes.push(r)));
+  if (!polys.length) return { type: 'Polygon', coordinates: rings };
+  holes.forEach(h => { (polys.find(p => pointInRing(h[0], p[0])) || polys[0]).push(h); });
+  return polys.length === 1 ? { type: 'Polygon', coordinates: polys[0] } : { type: 'MultiPolygon', coordinates: polys };
+}
+function pointInGeo(pt, geom) {
+  const polys = geom.type === 'Polygon' ? [geom.coordinates] : geom.coordinates;
+  return polys.some(p => pointInRing(pt, p[0]) && !p.slice(1).some(h => pointInRing(pt, h)));
+}
+// A label point for a polygon: area-weighted centroid of its biggest outer ring
+function labelPoint(geom) {
+  const polys = geom.type === 'Polygon' ? [geom.coordinates] : geom.coordinates;
+  let best = null, bestA = -1;
+  polys.forEach(p => {
+    const r = p[0], [ox, oy] = r[0];          // measure from the first corner to keep precision on small shapes
+    let a = 0, cx = 0, cy = 0;
+    for (let i = 0; i < r.length - 1; i++) {
+      const x0 = r[i][0] - ox, y0 = r[i][1] - oy, x1 = r[i + 1][0] - ox, y1 = r[i + 1][1] - oy;
+      const f = x0 * y1 - x1 * y0;
+      a += f; cx += (x0 + x1) * f; cy += (y0 + y1) * f;
+    }
+    if (Math.abs(a) > bestA && a !== 0) { bestA = Math.abs(a); best = [ox + cx / (3 * a), oy + cy / (3 * a)]; }
+  });
+  return best || polys[0][0][0];
+}
+// "E-20 T-18 A-8" -> "20"
+function engineNumber(name) { const m = /\bE-?\s*(\d+)/i.exec(name || ''); return m ? m[1] : null; }
+// Compass bearing (degrees) from a to b
+function bearing(a, b) {
+  const dx = (b[0] - a[0]) * Math.cos(a[1] * Math.PI / 180), dy = b[1] - a[1];
+  return (Math.atan2(dx, dy) * 180 / Math.PI + 360) % 360;
+}
+const compass = deg => ['north', 'northeast', 'east', 'southeast', 'south', 'southwest', 'west', 'northwest'][Math.round(deg / 45) % 8];
+const angleGap = (a, b) => { const d = Math.abs(a - b) % 360; return d > 180 ? 360 - d : d; };
+// Feet from a point to the nearest edge of a polygon (0 if inside)
+function feetToPolygon(pt, geom) {
+  if (pointInGeo(pt, geom)) return 0;
+  const k = Math.cos(pt[1] * Math.PI / 180);
+  let best = Infinity;
+  (geom.type === 'Polygon' ? [geom.coordinates] : geom.coordinates).forEach(p => p.forEach(r => {
+    for (let i = 0; i < r.length - 1; i++) {
+      const ax = (r[i][0] - pt[0]) * k, ay = r[i][1] - pt[1], bx = (r[i + 1][0] - pt[0]) * k, by = r[i + 1][1] - pt[1];
+      const dx = bx - ax, dy = by - ay, L = dx * dx + dy * dy;
+      const t = L ? Math.max(0, Math.min(1, -(ax * dx + ay * dy) / L)) : 0;
+      best = Math.min(best, Math.hypot(ax + t * dx, ay + t * dy));
+    }
+  }));
+  return best * 364000;   // degrees of latitude -> feet
+}
+
+// Give each firehouse's boxes a color so that neighboring houses never share one
+const HOUSE_COLORS = ['#f87171', '#fb923c', '#4ade80', '#38bdf8', '#c084fc', '#f472b6', '#2dd4bf', '#a3e635', '#818cf8', '#fbbf24', '#e879f9', '#94a3b8'];
+function bboxOf(geom) {
+  const polys = geom.type === 'Polygon' ? [geom.coordinates] : geom.coordinates;
+  let w = Infinity, s = Infinity, e = -Infinity, n = -Infinity;
+  polys.forEach(p => p[0].forEach(([x, y]) => { w = Math.min(w, x); e = Math.max(e, x); s = Math.min(s, y); n = Math.max(n, y); }));
+  return [w, s, e, n];
+}
+function sharesEdge(a, b) {            // do two polygons touch? (any vertex of one within ~15 m of the other's boundary box and inside/near)
+  const tol = 0.00015;
+  const A = bboxOf(a), B = bboxOf(b);
+  if (A[0] > B[2] + tol || B[0] > A[2] + tol || A[1] > B[3] + tol || B[1] > A[3] + tol) return false;
+  const ringsB = (b.type === 'Polygon' ? [b.coordinates] : b.coordinates).map(p => p[0]);
+  const ringsA = (a.type === 'Polygon' ? [a.coordinates] : a.coordinates).map(p => p[0]);
+  const near = (pt, rings) => rings.some(r => r.some(q => Math.abs(q[0] - pt[0]) < tol && Math.abs(q[1] - pt[1]) < tol));
+  return ringsA.some(r => r.some(pt => near(pt, ringsB)));
+}
+function assignHouseColors(fc) {
+  const houses = {};
+  fc.features.forEach(f => { const k = f.properties.engine || f.properties.house || '?'; (houses[k] = houses[k] || []).push(f); });
+  const keys = Object.keys(houses);
+  const adj = {}; keys.forEach(k => adj[k] = new Set());
+  for (let i = 0; i < keys.length; i++) for (let j = i + 1; j < keys.length; j++) {
+    const a = houses[keys[i]], b = houses[keys[j]];
+    if (a.some(fa => b.some(fb => sharesEdge(fa.geometry, fb.geometry)))) { adj[keys[i]].add(keys[j]); adj[keys[j]].add(keys[i]); }
+  }
+  const color = {};
+  keys.sort((x, y) => adj[y].size - adj[x].size).forEach(k => {
+    const used = new Set([...adj[k]].map(n => color[n]));
+    color[k] = HOUSE_COLORS.find(c => !used.has(c)) || HOUSE_COLORS[(+k || 0) % HOUSE_COLORS.length];
+  });
+  fc.features.forEach(f => f.properties.color = color[f.properties.engine || f.properties.house || '?']);
+}
+/*GEO-END*/
+
+// ============================================================
+// CITY DATA (normal request first, JSONP fallback if the browser blocks it)
+// ============================================================
+let jsonpCount = 0;
+function jsonp(url) {
+  return new Promise((resolve, reject) => {
+    const cb = '__city' + (jsonpCount++);
+    const s = document.createElement('script');
+    const timer = setTimeout(() => { done(); reject(new Error('timed out')); }, 20000);
+    function done() { clearTimeout(timer); try { delete window[cb]; } catch (e) { window[cb] = undefined; } s.remove(); }
+    window[cb] = data => { done(); resolve(data); };
+    s.onerror = () => { done(); reject(new Error('blocked')); };
+    s.src = url + '&callback=' + cb;
+    document.head.appendChild(s);
+  });
+}
+async function cityQuery(layer, params, base) {
+  const qs = new URLSearchParams(Object.assign({ f: 'json', outSR: '4326' }, params)).toString();
+  const url = `${base || CITY}/${layer}/query?${qs}`;
+  let data;
+  try {
+    const r = await fetch(url);
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    data = await r.json();
+  } catch (e) {
+    data = await jsonp(url);
+  }
+  if (data && data.error) throw new Error(data.error.message || 'city server error');
+  return data;
+}
+let cityWarned = false;
+function cityFailed(err) {
+  console.error(err);
+  if (cityWarned) return;
+  cityWarned = true;
+  showBanner("<strong>Couldn't reach the city's map data.</strong> Box lines and hydrants won't show, but the map and routing still work. Try reloading in a minute.");
+}
+
+// ============================================================
+// STATE
+// ============================================================
+let stations = [];            // [{id, name, address, lng, lat, engine}]
+let boxes = null;             // GeoJSON FeatureCollection of response districts
+let call = null;              // {lng, lat, label}
+let callBox = null;           // box feature properties
+let routeGeo = null;
+let nearHydrants = [];
+let areaHydrants = { type: 'FeatureCollection', features: [] };
+let callMarker = null, hydMarkers = [];
+let gpsOrigin = null;
+let nearXray = null, nearVacant = null;
+let callAccess = null;
+let callBldgInfo = null;   // building description from Maryland property records
+let styleName = 'sat';   // satellite by default
+const colorMode = 'plain';   // box areas: plain lines, no color shading
+
+// ============================================================
+// MAP
+// ============================================================
+if (typeof mapboxgl === 'undefined') {
+  showBanner("<strong>The map can't load here.</strong> Open this page in Chrome, Safari, Edge or Firefox (not inside a chat preview).");
+  $('splash').classList.add('gone');   // don't hide the warning behind the opening screen
+} else {
+  start();
+}
+
+// Start over the firehouse last chosen in the "From" bar (E-20 until one is picked)
+function startCenter() {
+  const v = (store('originPos') || '').split(',').map(Number);
+  return v.length === 2 && v.every(isFinite) ? [v[0], v[1] - 0.00012] : [DEFAULT_HOUSE.lng, DEFAULT_HOUSE.lat - 0.00012];
+}
+function start() {
+  mapboxgl.accessToken = MAPBOX_TOKEN;
+
+  // Controls first, so search works even if something below fails
+  setupOrigin();
+  setupSearch();
+  // Panel handle: tap to open / close, or slide it down (map fills the screen) and back up (half screen)
+  let grabDrag = null, grabMovedAt = 0;
+  $('grab').onclick = () => { if (Date.now() - grabMovedAt < 250) return; $('sheet').classList.toggle('collapsed'); };
+  $('grab').addEventListener('pointerdown', e => {
+    grabDrag = { y0: e.clientY, dy: 0, moved: false };
+    try { $('grab').setPointerCapture(e.pointerId); } catch (err) { /* older browsers */ }
+  });
+  $('grab').addEventListener('pointermove', e => {
+    if (!grabDrag) return;
+    grabDrag.dy = e.clientY - grabDrag.y0;
+    if (Math.abs(grabDrag.dy) > 6) grabDrag.moved = true;
+    if (!grabDrag.moved) return;
+    const sh = $('sheet'), down = !sh.classList.contains('collapsed');
+    sh.style.transition = 'none';
+    sh.style.transform = `translateY(${down ? Math.max(0, grabDrag.dy) : Math.min(0, Math.max(-40, grabDrag.dy))}px)`;   // follows your finger
+  });
+  const grabEnd = () => {
+    if (!grabDrag) return;
+    const sh = $('sheet'), d = grabDrag;
+    sh.style.transform = ''; sh.style.transition = '';
+    if (d.moved) {
+      grabMovedAt = Date.now();
+      if (d.dy > 40) sh.classList.add('collapsed');          // slid down: map takes the screen
+      else if (d.dy < -40) sh.classList.remove('collapsed'); // slid up: back to half screen
+    }
+    grabDrag = null;
+  };
+  $('grab').addEventListener('pointerup', grabEnd);
+  $('grab').addEventListener('pointercancel', grabEnd);
+
+  $('styleBtn').onclick = () => {
+    if (!window.map) return;
+    styleName = styleName === 'dark' ? 'sat' : 'dark';
+    $('styleBtn').textContent = styleName === 'dark' ? 'Satellite' : 'Dark map';
+    map.setStyle(STYLES[styleName]);
+  };
+
+  try {
+    window.map = new mapboxgl.Map({
+      container: 'map', style: STYLES[styleName],
+      center: startCenter(), zoom: 17.15, attributionControl: true   // close-up on the firehouse
+    });
+  } catch (e) {
+    showBanner("<strong>The map couldn't start on this device.</strong> " + esc(e.message));
+    return;
+  }
+  map.addControl(new mapboxgl.NavigationControl({ visualizePitch: true }), 'bottom-right');
+  map.addControl(new mapboxgl.GeolocateControl({ positionOptions: { enableHighAccuracy: true }, trackUserLocation: true }), 'bottom-right');
+
+  let tokenWarned = false;
+  map.on('error', e => {
+    const st = e && e.error && e.error.status;
+    if ((st === 401 || st === 403) && !tokenWarned) {
+      tokenWarned = true;
+      showBanner('<strong>Mapbox rejected the access token.</strong> Check the token at <a href="https://account.mapbox.com" target="_blank">account.mapbox.com</a> and paste it into MAPBOX_TOKEN at the top of the script.');
+    }
+  });
+
+  map.on('style.load', addOverlays);
+  // Compass rose: turns with the map, and sits just above the bottom panel (or beside it on a wide screen)
+  const placeCompass = () => {
+    const c = $('compass'), sh = $('sheet').getBoundingClientRect();
+    if (sh.width < window.innerWidth - 40) { c.style.left = (sh.right + 12) + 'px'; c.style.bottom = '34px'; }
+    else { c.style.left = '12px'; c.style.bottom = (window.innerHeight - sh.top + 12) + 'px'; }
+  };
+  const turnCompass = () => { $('compass').querySelector('svg').style.transform = `rotate(${-map.getBearing()}deg)`; };
+  map.on('rotate', turnCompass);
+  window.addEventListener('resize', placeCompass);
+  if (window.ResizeObserver) new ResizeObserver(placeCompass).observe($('sheet'));
+  placeCompass(); turnCompass();
+  map.on('click', e => {
+    const t = e.originalEvent && e.originalEvent.target;
+    if (t && t.closest && t.closest('.mapboxgl-marker')) return; // tapped a pin; let its popup open
+    const tapLayers = ['area-hydrants', ...hazIds('xray'), ...hazIds('vacant')].filter(l => map.getLayer(l));
+    if (tapLayers.length && map.queryRenderedFeatures(e.point, { layers: tapLayers }).length) return;
+    if (call) { toast('Call address is locked. Tap ✕ or "Clear call" to pick a new spot.'); return; }
+    pickBuildingAt([e.lngLat.lng, e.lngLat.lat]);
+  });
+  map.on('moveend', debounce(loadAreaHydrants, 400));
+  map.on('moveend', debounce(loadAreaHazards, 450));
+
+  loadStations();
+  loadBoxes();
+}
+
+// Map taps only count on a building (the dwelling itself), never the road, sidewalk or yard
+let tapBusy = false;
+async function pickBuildingAt(p) {
+  if (tapBusy) return;
+  tapBusy = true;
+  let onBldg = true;
+  try {
+    const r = await cityQuery(BUILDINGS_LAYER, { geometry: `${p[0]},${p[1]}`, geometryType: 'esriGeometryPoint', inSR: '4326',
+      spatialRel: 'esriSpatialRelIntersects', distance: '25', units: 'esriSRUnit_Foot',      // on the building or just in front / behind it
+      outFields: 'OBJECTID', returnGeometry: 'false' });
+    onBldg = (r.features || []).length > 0;
+  } catch (err) { onBldg = true; }          // city building data unreachable: don't block the tap
+  tapBusy = false;
+  if (call) return;                          // a search set the call while we were checking
+  if (!onBldg) { toast('Tap on or right next to the building.'); return; }
+  setCall({ lng: p[0], lat: p[1], label: null });
+}
+
+let toastTimer;
+function toast(msg) {
+  const t = $('toast'); t.textContent = msg; t.style.display = 'block';
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => { t.style.display = 'none'; }, 2200);
+}
+
+function debounce(fn, ms) { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; }
+
+// Re-added every time the base map style loads (style switches wipe custom layers)
+function addOverlays() {
+  const firstSymbol = (map.getStyle().layers.find(l => l.type === 'symbol') || {}).id;
+  const empty = { type: 'FeatureCollection', features: [] };
+
+  // Satellite view: hide the base map's street, alley and path lines (street names stay)
+  if (styleName === 'sat') map.getStyle().layers.forEach(l => {
+    if (l.type === 'line' && (l['source-layer'] === 'road' || /^(road|bridge|tunnel)/.test(l.id))) { try { map.setLayoutProperty(l.id, 'visibility', 'none'); } catch (e) {} }
+  });
+
+  map.addSource('boxes', { type: 'geojson', data: boxes || empty });
+  map.addSource('box-labels', { type: 'geojson', data: boxLabels() });
+  map.addSource('route', { type: 'geojson', data: routeGeo || empty });
+  map.addSource('stations', { type: 'geojson', data: stationsGeo() });
+  map.addSource('area-hydrants', { type: 'geojson', data: areaHydrants });
+
+  const st = boxStyle();
+  map.addLayer({ id: 'boxes-mine', type: 'fill', source: 'boxes', filter: st.fillFilter,
+    paint: { 'fill-color': st.fill, 'fill-opacity': st.fillOpacity } }, firstSymbol);
+  map.addLayer({ id: 'boxes-call', type: 'fill', source: 'boxes', filter: ['==', ['get', 'box'], callBox ? callBox.box : '__none'],
+    paint: { 'fill-color': '#ef4444', 'fill-opacity': 0 } }, firstSymbol);
+  map.addLayer({ id: 'boxes-line', type: 'line', source: 'boxes',
+    paint: { 'line-color': st.line, 'line-width': st.lineWidth,
+             'line-opacity': 0.85, 'line-dasharray': [2, 1.5] } }, firstSymbol);
+  map.addLayer({ id: 'route-casing', type: 'line', source: 'route', layout: { 'line-cap': 'round', 'line-join': 'round' },
+    paint: { 'line-color': '#0c4a6e', 'line-width': 9 } });
+  map.addLayer({ id: 'route-line', type: 'line', source: 'route', layout: { 'line-cap': 'round', 'line-join': 'round' },
+    paint: { 'line-color': '#38bdf8', 'line-width': 5 } });
+  map.addLayer({ id: 'area-hydrants', type: 'circle', source: 'area-hydrants', minzoom: 15.5,
+    paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 15.5, 3.5, 18, 7], 'circle-color': '#fb923c',
+             'circle-stroke-color': '#111', 'circle-stroke-width': 1.5 } });
+  map.addLayer({ id: 'box-labels', type: 'symbol', source: 'box-labels', minzoom: 12.5,
+    layout: { 'text-field': ['get', 'box'], 'text-size': ['interpolate', ['linear'], ['zoom'], 12.5, 11, 16, 16],
+              'text-font': ['DIN Pro Bold', 'Arial Unicode MS Bold'], 'text-allow-overlap': false },
+    paint: { 'text-color': st.label, 'text-halo-color': '#000', 'text-halo-width': 1.6 } });
+  map.addLayer({ id: 'stations', type: 'circle', source: 'stations',
+    paint: { 'circle-radius': 7, 'circle-color': '#fff', 'circle-stroke-color': '#ef4444', 'circle-stroke-width': 3 } });
+  map.addLayer({ id: 'station-labels', type: 'symbol', source: 'stations', minzoom: 11.5,
+    layout: { 'text-field': ['get', 'name'], 'text-size': 12, 'text-offset': [0, 1.3], 'text-anchor': 'top',
+              'text-font': ['DIN Pro Bold', 'Arial Unicode MS Bold'] },
+    paint: { 'text-color': '#fff', 'text-halo-color': '#000', 'text-halo-width': 1.6 } });
+
+  // Only the alley that belongs to the call location is drawn (filled in after a search)
+  map.addSource('callalley', { type: 'geojson', data: callAccess && callAccess.line ? callAccess.line : { type: 'FeatureCollection', features: [] } });
+  map.addLayer({ id: 'callalley', type: 'line', source: 'callalley', filter: ['==', ['geometry-type'], 'LineString'],
+    layout: { 'line-cap': 'round', 'line-join': 'round' },
+    paint: { 'line-color': '#fde047', 'line-width': ['interpolate', ['linear'], ['zoom'], 14, 3, 18, 6], 'line-dasharray': [1.5, 1] } });
+  map.addLayer({ id: 'callalley-ends', type: 'circle', source: 'callalley', filter: ['==', ['geometry-type'], 'Point'],
+    paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 14, 3.5, 18, 7],   // same size as the X / D / V dots
+             'circle-color': '#fde047', 'circle-stroke-color': '#111', 'circle-stroke-width': 1.5 } });
+  map.addLayer({ id: 'callalley-labels', type: 'symbol', source: 'callalley', filter: ['==', ['geometry-type'], 'Point'],
+    layout: { 'text-field': ['get', 'label'], 'text-size': ['interpolate', ['linear'], ['zoom'], 15, 7, 18, 9], 'text-anchor': 'center',
+              'text-font': ['DIN Pro Bold', 'Arial Unicode MS Bold'], 'text-allow-overlap': true, 'text-ignore-placement': true },
+    paint: { 'text-color': '#111' } });
+
+  map.addSource('vacant', { type: 'geojson', data: areaVacant });
+  map.addSource('xray', { type: 'geojson', data: areaXray });
+  // Hazard dots stack straight up on the screen above a fixed spot on each building (X, then D, then V).
+  // Each stack position is its own copy of the layer, shifted up by a set number of pixels.
+  const hazLayer = def => HAZ_UPS.forEach(v => {
+    const l = JSON.parse(JSON.stringify(def)), kind = l.type === 'circle' ? 'circle' : 'text';
+    if (v) l.id += '-u' + v;
+    l.filter = ['==', ['coalesce', ['get', 'up'], 0], v];
+    l.paint = Object.assign({}, l.paint, { [kind + '-translate']: [0, -v], [kind + '-translate-anchor']: 'viewport' });
+    map.addLayer(l);
+  });
+  hazLayer({ id: 'vacant', type: 'circle', source: 'vacant', minzoom: 15.5,
+    paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 15.5, 3.5, 18, 7], 'circle-color': '#16a34a',
+             'circle-stroke-color': '#fff', 'circle-stroke-width': 1.5 } });
+  hazLayer({ id: 'vacant-v', type: 'symbol', source: 'vacant', minzoom: 16,
+    layout: { 'text-field': 'V', 'text-size': ['interpolate', ['linear'], ['zoom'], 16, 7, 18, 9],
+              'text-font': ['DIN Pro Bold', 'Arial Unicode MS Bold'], 'text-allow-overlap': true, 'text-ignore-placement': true },
+    paint: { 'text-color': '#fff' } });
+  hazLayer({ id: 'xray', type: 'circle', source: 'xray', minzoom: 14,
+    paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 14, 3.5, 18, 7],
+             'circle-color': ['case', ['any', ['==', ['upcase', ['to-string', ['get', 'szType']]], 'DNG'], ['in', 'UNSAFE', ['upcase', ['to-string', ['get', 'szType']]]], ['in', 'DANGER', ['upcase', ['to-string', ['get', 'szType']]]]], '#e11d48', '#e11d48'],   // purple = unsafe / dangerous condition
+             'circle-stroke-color': '#fff', 'circle-stroke-width': 1.5 } });
+  hazLayer({ id: 'xray-x', type: 'symbol', source: 'xray', minzoom: 15,
+    layout: { 'text-field': ['case', ['any', ['==', ['upcase', ['to-string', ['get', 'szType']]], 'DNG'], ['in', 'UNSAFE', ['upcase', ['to-string', ['get', 'szType']]]], ['in', 'DANGER', ['upcase', ['to-string', ['get', 'szType']]]]], 'D', 'X'], 'text-size': ['interpolate', ['linear'], ['zoom'], 15, 7, 18, 9], 'text-font': ['DIN Pro Bold', 'Arial Unicode MS Bold'], 'text-allow-overlap': true, 'text-ignore-placement': true },
+    paint: { 'text-color': '#fff' } });
+  hazIds('xray').forEach(id => map.on('click', id, e => new mapboxgl.Popup({ offset: 8 }).setLngLat(e.lngLat).setHTML(xrayHTML(e.features[0].properties)).addTo(map)));
+  hazIds('vacant').forEach(id => map.on('click', id, e => new mapboxgl.Popup({ offset: 8 }).setLngLat(e.lngLat).setHTML(vacantHTML(e.features[0].properties)).addTo(map)));
+  loadAreaHazards();
+
+  map.on('click', 'area-hydrants', e => {
+    const p = e.features[0].properties;
+    new mapboxgl.Popup({ offset: 8 }).setLngLat(e.lngLat).setHTML(hydrantHTML(p)).addTo(map);
+  });
+  map.on('mouseenter', 'area-hydrants', () => map.getCanvas().style.cursor = 'pointer');
+  map.on('mouseleave', 'area-hydrants', () => map.getCanvas().style.cursor = '');
+  loadAreaHydrants();
+}
+
+function boxStyle() {
+  const mine = ['==', ['get', 'engine'], myEngine() || '__none'];
+  if (colorMode === 'house') return {
+    fillFilter: ['has', 'color'], fill: ['get', 'color'], fillOpacity: 0.16,
+    line: ['get', 'color'], label: ['get', 'color'], lineWidth: ['interpolate', ['linear'], ['zoom'], 11, ['case', mine, 1.6, 0.8], 15, ['case', mine, 3.5, 2]] };
+  if (colorMode === 'plain') return {
+    fillFilter: ['==', ['get', 'box'], '__none'], fill: '#ef4444', fillOpacity: 0,
+    line: '#ef4444', label: '#fca5a5', lineWidth: ['interpolate', ['linear'], ['zoom'], 11, 0.6, 15, 2] };
+  return {
+    fillFilter: mine, fill: '#f59e0b', fillOpacity: 0.10,
+    line: ['case', mine, '#f59e0b', '#ef4444'], label: ['case', mine, '#fbbf24', '#fca5a5'],
+    lineWidth: ['interpolate', ['linear'], ['zoom'], 11, 0.6, 15, 2] };
+}
+
+function setData(src, data) { const s = map.getSource(src); if (s) s.setData(data); }
+function refreshBoxFilters() {
+  if (!window.map) return;
+  ['boxes-line', 'box-labels'].forEach(id => { if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', call ? 'none' : 'visible'); });
+  const st = boxStyle();
+  if (map.getLayer('boxes-mine')) {
+    map.setFilter('boxes-mine', st.fillFilter);
+    map.setPaintProperty('boxes-mine', 'fill-color', st.fill);
+    map.setPaintProperty('boxes-mine', 'fill-opacity', st.fillOpacity);
+  }
+  if (map.getLayer('boxes-call')) map.setFilter('boxes-call', ['==', ['get', 'box'], callBox ? callBox.box : '__none']);
+  if (map.getLayer('boxes-line')) {
+    map.setPaintProperty('boxes-line', 'line-color', st.line);
+    map.setPaintProperty('boxes-line', 'line-width', st.lineWidth);
+  }
+  if (map.getLayer('box-labels')) map.setPaintProperty('box-labels', 'text-color', st.label);
+}
+
+// ============================================================
+// LOAD CITY LAYERS
+// ============================================================
+async function loadStations() {
+  try {
+    const d = await cityQuery(LAYER.stations, { where: '1=1', outFields: 'NAME,ADDRESS', returnGeometry: 'true' });
+    stations = (d.features || []).filter(f => f.geometry).map(f => {
+      const raw = clean(f.attributes.NAME).replace(/\s+/g, ' ');
+      const rawEngine = engineNumber(raw);
+      if (!rawEngine) return null;                       // skip non-firehouse sites (fireboat, etc.)
+      const name = fixMedics(fixQuarters(rawEngine, raw));
+      const engine = engineNumber(name);                 // null if the engine moved out
+      const id = engine ? 'E-' + engine : (name.split(' ')[0] || 'Q-' + rawEngine);
+      const sortKey = Number(engine || (name.match(/\d+/) || [999])[0]);
+      return { id, name, address: clean(f.attributes.ADDRESS), lng: f.geometry.x, lat: f.geometry.y, engine, sortKey };
+    }).filter(Boolean).sort((a, b) => a.sortKey - b.sortKey);
+  } catch (e) {
+    cityFailed(e);
+  }
+  if (!stations.length) stations = [Object.assign({ engine: '20' }, DEFAULT_HOUSE)];
+  fillOrigin();
+  setData('stations', stationsGeo());
+}
+
+async function loadBoxes() {
+  try {
+    let feats = [], offset = 0, more = true;
+    while (more && offset < 5000) {
+      const d = await cityQuery(LAYER.boxes, {
+        where: '1=1', outFields: `${AREA_FIELD},MapBook`, returnGeometry: 'true',
+        maxAllowableOffset: '0.00002', geometryPrecision: '6', resultOffset: String(offset), orderByFields: 'OBJECTID_1'
+      });
+      const got = d.features || [];
+      feats = feats.concat(got);
+      offset += got.length;
+      more = d.exceededTransferLimit && got.length > 0;
+    }
+    boxes = { type: 'FeatureCollection', features: feats.filter(f => f.geometry && f.geometry.rings && f.geometry.rings.length).map((f, i) => {
+      const box = clean(f.attributes[AREA_FIELD]);
+      return { type: 'Feature', id: i, geometry: esriToGeo(f.geometry.rings),
+        properties: (() => {
+          const engine = (box.split('-')[0] || '').replace(/\D/g, '');
+          let house = clean(f.attributes.MapBook);
+          if (QUARTERS_FIXES[engine]) {
+            const st = stations.find(x => x.engine === engine);
+            house = houseLabel(st ? st.name : fixQuarters(engine, house.replace(/Engine\s*/i, 'E-').replace(/Truck\s*/gi, 'T-').replace(/&/g, ' ')));
+          }
+          return { box, engine, house };
+        })() };
+    }) };
+    try { assignHouseColors(boxes); } catch (e) { console.error(e); }
+    setData('boxes', boxes);
+    setData('box-labels', boxLabels());
+    if (call && !callBox) { callBox = findBox(call); renderSheet(); refreshBoxFilters(); }
+  } catch (e) {
+    cityFailed(e);
+  }
+}
+
+// Hydrants inside [west, south, east, north]. Tries the main 911 layer, then the backup service.
+async function hydrantsInBox(w, sth, e, n) {
+  const params = { geometry: [w, sth, e, n].join(','), geometryType: 'esriGeometryEnvelope', inSR: '4326',
+    spatialRel: 'esriSpatialRelIntersects', outFields: '*', returnGeometry: 'true' };
+  let firstErr;
+  for (const [layer, base] of [[LAYER.hydrants, CITY], [0, HYDRANT_BACKUP]]) {
+    try {
+      const d = await cityQuery(layer, params, base);
+      return (d.features || []).filter(f => f.geometry && isFinite(f.geometry.x) && isFinite(f.geometry.y));
+    } catch (err) { firstErr = firstErr || err; }
+  }
+  throw firstErr;
+}
+
+// Any city point layer inside [west, south, east, north]
+async function pointsInBox(base, layer, w, sth, e, n) {
+  const d = await cityQuery(layer, { geometry: [w, sth, e, n].join(','), geometryType: 'esriGeometryEnvelope', inSR: '4326',
+    spatialRel: 'esriSpatialRelIntersects', outFields: '*', returnGeometry: 'true' }, base);
+  return (d.features || []).filter(f => f.geometry && isFinite(f.geometry.x) && isFinite(f.geometry.y));
+}
+const toFC = feats => ({ type: 'FeatureCollection', features: feats.map(f => ({
+  type: 'Feature', geometry: { type: 'Point', coordinates: [f.geometry.x, f.geometry.y] }, properties: f.attributes || {} })) });
+let areaXray = { type: 'FeatureCollection', features: [] }, areaVacant = { type: 'FeatureCollection', features: [] };
+// The city's X-Ray points sit at the front entrance. Move each one onto the middle of its building
+// (city building outlines, one request for all points on screen). If that fails, dots stay where they are.
+const BUILDINGS_LAYER = 20;
+async function onRoofs(feats) {
+  if (!feats.length) return feats;
+  try {
+    const pts = feats.map(f => [f.geometry.x, f.geometry.y]);
+    const d = await cityQuery(BUILDINGS_LAYER, {
+      geometry: JSON.stringify({ points: pts, spatialReference: { wkid: 4326 } }), geometryType: 'esriGeometryMultipoint',
+      inSR: '4326', spatialRel: 'esriSpatialRelIntersects', distance: '100', units: 'esriSRUnit_Foot',
+      outFields: 'OBJECTID', returnGeometry: 'true', geometryPrecision: '7' });
+    const bldgs = (d.features || []).filter(b => b.geometry && b.geometry.rings && b.geometry.rings.length).map(b => esriToGeo(b.geometry.rings));
+    if (!bldgs.length) return feats;
+    // One rule: if the dot isn't on a building, move it onto the middle of the closest building
+    return feats.map(f => {
+      const p = [f.geometry.x, f.geometry.y];
+      if (bldgs.some(g => pointInGeo(p, g))) return f;
+      let best = null, bestFt = Infinity;
+      bldgs.forEach(g => { const ft = feetToPolygon(p, g); if (ft < bestFt) { bestFt = ft; best = g; } });
+      if (!best) return f;
+      // walk straight through the building from the nearest wall and put the dot halfway across
+      const q = nearestOnPolygon(p, best), dir = bearing(p, q);
+      let far = null;
+      for (let ft = 1; ft <= 300; ft += 1) { const r = offsetFeet(q, dir, ft); if (pointInGeo(r, best)) far = ft; else if (far) break; }
+      const c = far ? offsetFeet(q, dir, far / 2) : q;
+      return Object.assign({}, f, { geometry: { x: c[0], y: c[1] } });
+    });
+  } catch (e) { console.error(e); return feats; }
+}
+
+function polyAreaFt(g) {
+  const r = (g.type === 'Polygon' ? g.coordinates : g.coordinates[0])[0], k = Math.cos(r[0][1] * Math.PI / 180);
+  let a = 0;
+  for (let i = 0; i < r.length - 1; i++) a += ((r[i][0] - r[0][0]) * k) * (r[i + 1][1] - r[0][1]) - ((r[i + 1][0] - r[0][0]) * k) * (r[i][1] - r[0][1]);
+  return Math.abs(a) / 2 * 364000 * 364000;
+}
+function nearestOnPolygon(pt, g) {
+  const k = Math.cos(pt[1] * Math.PI / 180);
+  let best = null, bestD = Infinity;
+  (g.type === 'Polygon' ? [g.coordinates] : g.coordinates).forEach(poly => poly.forEach(r => {
+    for (let i = 0; i < r.length - 1; i++) {
+      const ax = (r[i][0] - pt[0]) * k, ay = r[i][1] - pt[1], bx = (r[i + 1][0] - pt[0]) * k, by = r[i + 1][1] - pt[1];
+      const dx = bx - ax, dy = by - ay, L = dx * dx + dy * dy, t = L ? Math.max(0, Math.min(1, -(ax * dx + ay * dy) / L)) : 0;
+      const d = Math.hypot(ax + t * dx, ay + t * dy);
+      if (d < bestD) { bestD = d; best = [r[i][0] + t * (r[i + 1][0] - r[i][0]), r[i][1] + t * (r[i + 1][1] - r[i][1])]; }
+    }
+  }));
+  return best;
+}
+
+// One dot per flag per house: repeat records of the same flag on the same spot become one dot.
+// If two different flags share a house (X + V, X + D), the second sits right beside the first so both letters read.
+// Stack positions in screen pixels: 0 / 15 / 30 on an ordinary building; 34 / 49 / 64 on the call address (above the location pin)
+const HAZ_UPS = [0, 15, 30, 34, 49, 64];
+const hazIds = base => HAZ_UPS.map(v => v ? `${base}-u${v}` : base);
+let areaXrayRaw = { type: 'FeatureCollection', features: [] }, hazBldgs = [];
+const hazAddr = p => clean(p.szLocation) || [p.nHouseNum, p.szStreet].filter(Boolean).join(' ') || clean(p.Address);
+const hazKind = p => p.szType == null ? 'V' : /^DNG$|UNSAFE|DANGER/i.test(String(p.szType)) ? 'D' : 'X';
+// The spot on a building where its dots sit: the front wall facing its own address street, in line with the record
+function hazFront(q, addr) {
+  const core = addrParts(addr).core;
+  let s = null, sd = Infinity;
+  hazFront.along = null;                                         // direction along the front wall, when known
+  if (core && window.map && map.querySourceFeatures) {
+    let roads = [];
+    try { roads = map.querySourceFeatures('composite', { sourceLayer: 'road' }); } catch (e) { /* no road lines yet */ }
+    roads.forEach(f => {
+      if (!f.properties || streetCore(f.properties.name) !== core) return;
+      const g = f.geometry || {}, lines = g.type === 'LineString' ? [g.coordinates] : g.type === 'MultiLineString' ? g.coordinates : [];
+      lines.forEach(ln => { const p = nearestOnPolygon(q, { type: 'Polygon', coordinates: [ln] }); const d = p ? feetBetween(q, p) : Infinity; if (d < sd) { sd = d; s = p; } });
+    });
+    if (sd > 250) s = null;
+  }
+  let b = hazBldgs.find(g => pointInGeo(q, g)) || null;
+  if (!b) { let bd = 60; hazBldgs.forEach(g => { const d = feetToPolygon(q, g); if (d < bd) { bd = d; b = g; } }); }
+  if (b && s) {                                                  // halfway back from the front wall, over the house itself
+    const w = nearestOnPolygon(s, b);
+    if (w) {
+      const dir = feetBetween(s, w) > 1 ? bearing(s, w) : bearing(w, q);   // straight in from the street
+      hazFront.along = (dir + 90) % 360;
+      let depth = 0;
+      for (let ft = 2; ft <= 120; ft += 2) { if (pointInGeo(offsetFeet(w, dir, ft), b)) depth = ft; else if (depth) break; }
+      return offsetFeet(w, dir, depth ? Math.min(depth / 2, 30) : 15);
+    }
+    return q;
+  }
+  if (b) { if (pointInGeo(q, b)) return q; const w = nearestOnPolygon(q, b); return w ? offsetFeet(w, bearing(q, w), 4) : q; }   // no street found: onto the roof
+  return q;
+}
+function showHazards() {
+  const groups = new Map();
+  const add = (f, kind) => {
+    const p = f.properties || {}, q = f.geometry.coordinates, addr = hazAddr(p), a = addrParts(addr);
+    const key = a.num && a.core ? `${a.num}|${a.core}|${a.dir || ''}` : 'pt|' + q.map(v => v.toFixed(4)).join(',');
+    if (!groups.has(key)) groups.set(key, { q, addr, kinds: {} });
+    const g = groups.get(key);
+    if (!g.kinds[kind]) g.kinds[kind] = p;                     // one dot per flag per address
+  };
+  areaXrayRaw.features.forEach(f => add(f, hazKind(f.properties || {})));
+  areaVacant.features.forEach(f => add(f, 'V'));
+  const sides = call && callAccess && callAccess.sides;
+  const xs = [], vs = [], bases = [];
+  groups.forEach(g => {
+    const atCall = !!(sides && sides.A && call.label && sameAddr(g.addr, call.label));
+    let base = atCall ? sides.A : hazFront(g.q, g.addr);
+    if (!atCall) {                                               // next-door stacks: step sideways along the wall so they don't overlap
+      const along = hazFront.along != null ? hazFront.along : 90;
+      for (const ft of [12, -12, 24, -24]) { if (!bases.some(c => feetBetween(c, base) < 11)) break; base = offsetFeet(base, along, ft); }
+    }
+    bases.push(base);
+    const ups = atCall ? [34, 49, 64] : [0, 15, 30];
+    ['X', 'D', 'V'].filter(k => g.kinds[k]).forEach((k, i) => {
+      const feat = { type: 'Feature', geometry: { type: 'Point', coordinates: base }, properties: Object.assign({}, g.kinds[k], { up: ups[i] }) };
+      (k === 'V' ? vs : xs).push(feat);
+    });
+  });
+  setData('xray', { type: 'FeatureCollection', features: xs });
+  setData('vacant', { type: 'FeatureCollection', features: vs });
+}
+async function loadAreaHazards() {
+  if (!window.map) return;
+  const z = map.getZoom(), b = map.getBounds(), box = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()];
+  const [x, v] = await Promise.all([
+    z >= 14 ? pointsInBox(XRAY_SVC, 0, ...box).catch(e => { console.error(e); return null; }) : null,
+    z >= 15.5 ? pointsInBox(VACANT_SVC, 1, ...box).catch(e => { console.error(e); return null; }) : null]);
+  if (x) areaXrayRaw = toFC(x);
+  if (v) areaVacant = toFC(v);
+  if (z >= 15.5) {
+    const pts = areaXrayRaw.features.concat(areaVacant.features).map(f => f.geometry.coordinates);
+    if (pts.length) {
+      const batches = [];
+      for (let i = 0; i < pts.length; i += 12) batches.push(pts.slice(i, i + 12));   // short requests (a long list can be refused)
+      const got = await Promise.all(batches.map(bp => cityQuery(BUILDINGS_LAYER, {
+        geometry: JSON.stringify({ points: bp.map(p => [+p[0].toFixed(6), +p[1].toFixed(6)]), spatialReference: { wkid: 4326 } }),
+        geometryType: 'esriGeometryMultipoint', inSR: '4326', spatialRel: 'esriSpatialRelIntersects', distance: '60', units: 'esriSRUnit_Foot',
+        outFields: 'OBJECTID', returnGeometry: 'true', geometryPrecision: '7' }).catch(e => { console.error(e); return null; })));
+      const seen = new Set(), out = [];
+      got.forEach(d => ((d && d.features) || []).forEach(f => {
+        const id = f.attributes && f.attributes.OBJECTID;
+        if (!f.geometry || !f.geometry.rings || !f.geometry.rings.length || (id != null && seen.has(id))) return;
+        if (id != null) seen.add(id);
+        out.push(esriToGeo(f.geometry.rings));
+      }));
+      if (out.length) hazBldgs = out;
+    }
+  }
+  showHazards();
+  if (map.once) map.once('idle', showHazards);                 // again once the street lines have loaded
+}
+
+async function loadAreaHydrants() {
+  if (!window.map || map.getZoom() < 15.5) return;
+  const b = map.getBounds();
+  try {
+    const feats = await hydrantsInBox(b.getWest(), b.getSouth(), b.getEast(), b.getNorth());
+    areaHydrants = { type: 'FeatureCollection', features: feats.map(f => ({
+      type: 'Feature', geometry: { type: 'Point', coordinates: [f.geometry.x, f.geometry.y] }, properties: f.attributes })) };
+    setData('area-hydrants', areaHydrants);
+  } catch (e) { console.error(e); }
+}
+
+function boxLabels() {
+  if (!boxes) return { type: 'FeatureCollection', features: [] };
+  return { type: 'FeatureCollection', features: boxes.features.map(f => ({
+    type: 'Feature', properties: f.properties, geometry: { type: 'Point', coordinates: labelPoint(f.geometry) } })) };
+}
+function stationsGeo() {
+  return { type: 'FeatureCollection', features: stations.map(s => ({
+    type: 'Feature', properties: { name: s.name }, geometry: { type: 'Point', coordinates: [s.lng, s.lat] } })) };
+}
+function findBox(pt) {
+  if (!boxes) return null;
+  const f = boxes.features.find(f => pointInGeo([pt.lng, pt.lat], f.geometry));
+  return f ? f.properties : null;
+}
+
+// ============================================================
+// RESPONDING-FROM PICKER
+// ============================================================
+function setupOrigin() {
+  $('origin').onchange = () => {
+    store('origin', $('origin').value);
+    refreshBoxFilters();
+    if ($('origin').value === 'gps') getGps().then(() => call && runRoute());
+    else if (call) runRoute();
+    // move the map over the firehouse just picked (same close-up as the opening view)
+    const s = stations.find(x => x.id === $('origin').value);
+    if (s && window.map) map.flyTo({ center: [s.lng, s.lat - 0.00012], zoom: 17.15 });
+    if (s) store('originPos', s.lng + ',' + s.lat);
+  };
+}
+function fillOrigin() {
+  const saved = store('origin') || DEFAULT_HOUSE.id;
+  $('origin').innerHTML = stations.map(s =>
+    `<option value="${esc(s.id)}">From ${esc(s.name)} — ${esc(s.address.replace(/\s\d{5}$/, ''))}</option>`).join('') +
+    '<option value="gps">From my current location (GPS)</option>';
+  $('origin').value = [...$('origin').options].some(o => o.value === saved) ? saved : (stations[0] || {}).id;
+  refreshBoxFilters();
+  if ($('origin').value === 'gps') getGps();
+  $('splashPick').innerHTML = '<option value="" selected disabled>Choose your location…</option>' + $('origin').innerHTML;
+  $('splashPick').value = '';
+  $('splashPick').onchange = () => {
+    if (!$('splashPick').value) return;
+    $('origin').value = $('splashPick').value;
+    $('origin').onchange();                        // same as picking it in the From bar: moves the map there
+    $('splash').classList.add('gone');
+  };
+  // open the map over the firehouse chosen in the "From" bar (it's remembered between visits)
+  const s = stations.find(x => x.id === $('origin').value);
+  if (s && !call && window.map) { map.jumpTo({ center: [s.lng, s.lat - 0.00012], zoom: 17.15 }); store('originPos', s.lng + ',' + s.lat); }
+}
+function currentOrigin() {
+  const v = $('origin').value;
+  if (v === 'gps') return gpsOrigin;
+  return stations.find(s => s.id === v) || DEFAULT_HOUSE;
+}
+function myEngine() {
+  const v = $('origin').value;
+  if (!v || v === 'gps' || !/^E-\d+$/.test(v)) return null;
+  return v.replace('E-', '');
+}
+function getGps() {
+  return new Promise(resolve => {
+    if (!navigator.geolocation) { showBanner('This device can\'t share its location.'); return resolve(); }
+    navigator.geolocation.getCurrentPosition(
+      p => { gpsOrigin = { name: 'My location', lng: p.coords.longitude, lat: p.coords.latitude }; resolve(); },
+      () => { showBanner('Location permission was denied, so routing will start from your firehouse.'); resolve(); },
+      { enableHighAccuracy: true, timeout: 10000 });
+  });
+}
+
+// ============================================================
+// ADDRESS SEARCH (Mapbox geocoding, limited to Baltimore City)
+// ============================================================
+let lastResults = [];
+function fmtResult(main, rest, lng, lat) { return { main, rest, lng, lat }; }
+
+// Try Mapbox's v5 geocoder, then its newer v6 one. Returns [{main, rest, lng, lat}] or throws with a reason.
+async function geocode(text) {
+  const o = currentOrigin() || DEFAULT_HOUSE;
+  const common = `access_token=${MAPBOX_TOKEN}&limit=6&country=us&bbox=${CITY_BBOX.join(',')}&proximity=${o.lng},${o.lat}`;
+  let reason = '';
+  try {
+    const r = await fetch(`https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(text)}.json?${common}&autocomplete=true&types=address,poi,postcode`);
+    const d = await r.json().catch(() => ({}));
+    if (r.status === 401 || r.status === 403) throw Object.assign(new Error('token'), { token: true });
+    if (r.ok && Array.isArray(d.features)) {
+      return d.features.map(f => {
+        const main = f.address ? `${f.address} ${f.text}` : f.text;
+        return fmtResult(main, f.place_name.replace(main + ', ', ''), f.center[0], f.center[1]);
+      });
+    }
+    reason = d.message || ('HTTP ' + r.status);
+  } catch (e) { if (e.token) throw e; reason = e.message; }
+  // Fallback: Mapbox Geocoding v6
+  const r = await fetch(`https://api.mapbox.com/search/geocode/v6/forward?q=${encodeURIComponent(text)}&${common}&autocomplete=true`);
+  const d = await r.json().catch(() => ({}));
+  if (r.status === 401 || r.status === 403) throw Object.assign(new Error('token'), { token: true });
+  if (!r.ok || !Array.isArray(d.features)) throw new Error(d.message || reason || ('HTTP ' + r.status));
+  return d.features.map(f => {
+    const p = f.properties || {};
+    const main = p.name || p.full_address || 'Result';
+    return fmtResult(main, p.place_formatted || p.full_address || '', f.geometry.coordinates[0], f.geometry.coordinates[1]);
+  });
+}
+
+function setupSearch() {
+  const q = $('q'), box = $('suggest');
+  const say = html => { box.innerHTML = `<div style="color:var(--muted);cursor:default">${html}</div>`; box.style.display = 'block'; };
+  let seq = 0, picked = '';
+  async function run(autoPick) {
+    const text = q.value.trim();
+    if (text.length < 3) { box.style.display = 'none'; return; }
+    if (!autoPick && text === picked) return; // already chose this one
+    const mine = ++seq;
+    say('Searching…');
+    try {
+      const results = await geocode(text);
+      if (mine !== seq) return;
+      lastResults = results;
+      if (!results.length) { say('No matches in Baltimore City. Try adding the street type, like "Ave" or "St".'); return; }
+      if (autoPick) { pick(0); return; }
+      box.innerHTML = results.map((f, i) => `<div data-i="${i}">${esc(f.main)}<small>${esc(f.rest)}</small></div>`).join('');
+      box.style.display = 'block';
+    } catch (e) {
+      if (mine !== seq) return;
+      lastResults = [];
+      if (e.token) say('<b style="color:#fca5a5">Mapbox rejected the access token.</b> If you deleted or changed it, paste the new one into MAPBOX_TOKEN at the top of the script.');
+      else if (location.protocol === 'file:' && /fail|network|load/i.test(e.message)) say('<b style="color:#fca5a5">Search couldn\'t reach Mapbox.</b> Check your internet connection, or open the page from a web link (like Netlify) instead of a saved file.');
+      else say('<b style="color:#fca5a5">Search failed:</b> ' + esc(e.message));
+    }
+  }
+  const typed = debounce(() => run(false), 300);
+  q.addEventListener('input', typed);
+  q.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); lastResults.length ? pick(0) : run(true); } });
+  $('go').onclick = () => (lastResults.length && box.style.display === 'block' && box.querySelector('[data-i]')) ? pick(0) : run(true);
+  box.addEventListener('click', e => { const d = e.target.closest('[data-i]'); if (d) pick(+d.dataset.i); });
+  $('clear').onclick = () => { q.value = ''; lastResults = []; box.style.display = 'none'; clearCall(); };
+  // Paste: read the copied address and search it right away
+  $('paste').onclick = async () => {
+    try {
+      const text = (await navigator.clipboard.readText() || '').replace(/\s+/g, ' ').trim();
+      if (!text) { say('Nothing copied yet. Copy the call address first, then tap Paste.'); return; }
+      q.value = text.slice(0, 120); lastResults = []; picked = '';
+      run(true);
+    } catch (e) {
+      say("Couldn't read what you copied. Press and hold in the search box and tap Paste instead.");
+    }
+  };
+
+  // Opening the app with ?q=ADDRESS in the link searches that address automatically
+  const pre = new URLSearchParams(location.search).get('q');
+  if (pre && pre.trim()) { q.value = pre.trim().slice(0, 120); setTimeout(() => run(true), 0); }
+
+  function pick(i) {
+    const f = lastResults[i]; if (!f) return;
+    seq++; box.style.display = 'none'; q.blur();
+    q.value = f.main; picked = f.main.trim();
+    lastResults = [];
+    setCall({ lng: f.lng, lat: f.lat, label: f.main });
+  }
+}
+
+async function reverseLabel(pt) {
+  try {
+    const r = await fetch(`https://api.mapbox.com/geocoding/v5/mapbox.places/${pt.lng},${pt.lat}.json?access_token=${MAPBOX_TOKEN}&types=address&limit=1`);
+    const d = await r.json(); const f = (d.features || [])[0];
+    return f ? (f.address ? `${f.address} ${f.text}` : f.text) : null;
+  } catch (e) { return null; }
+}
+
+// A state record point belongs to this building unless it sits on a different building
+function buildingParts(fp) {
+  if (!fp) return [];
+  const ringsOf = g => (g.type === 'Polygon' ? [g.coordinates] : g.coordinates).map(p => p[0]);
+  const parts = [fp];                                                   // this building, including pieces drawn separately
+  for (let grew = true; grew;) {
+    grew = false;
+    (fp.others || []).forEach(o => {
+      if (parts.includes(o)) return;
+      if (parts.some(p => ringsOf(o).some(r => r.some(v => feetToPolygon(v, p) < 3)) || ringsOf(p).some(r => r.some(v => feetToPolygon(v, o) < 3)))) { parts.push(o); grew = true; }
+    });
+  }
+  return parts;
+}
+function recordIsOurs(q, fp) {
+  if (!fp) return true;
+  const parts = buildingParts(fp);
+  if (parts.some(p => feetToPolygon(q, p) < 10)) return true;
+  return !(fp.others || []).some(o => !parts.includes(o) && feetToPolygon(q, o) < 5);
+}
+
+// A tapped building gets the real address the state has on record for it.
+// The map gives a street and an estimated number (e.g. "3038 West North Avenue", not a real address).
+// Pick the state record on that same street, same side (odd / even), with the closest number,
+// never one that sits on a different building. No match: keep the map's address.
+async function tapLabel(pt) {
+  const mapLabel = await reverseLabel(pt);
+  const num = parseInt(((mapLabel || '').match(/^\s*(\d+)/) || [])[1], 10), street = streetCore(mapLabel || '');
+  if (!num || !street) return mapLabel;
+  const p = [pt.lng, pt.lat];
+  const stateLookup = (async () => {
+  try {
+    const fp = await callFootprint(p);
+    for (const src of MD_PROPERTY_SOURCES) {
+      try {
+        const d = await cityQuery(0, { geometry: `${p[0]},${p[1]}`, geometryType: 'esriGeometryPoint', inSR: '4326',
+          spatialRel: 'esriSpatialRelIntersects', distance: '150', units: 'esriSRUnit_Meter', where: '1=1', outFields: 'ADDRESS', returnGeometry: 'true' }, src);
+        const recs = (d.features || []).map(f => {
+          const addr = clean(f.attributes && f.attributes.ADDRESS), n = parseInt((addr.match(/^\s*(\d+)/) || [])[1], 10);
+          return { addr, n, q: f.geometry ? [f.geometry.x, f.geometry.y] : null };
+        }).filter(r => r.q && r.n && streetCore(r.addr) === street && r.n % 2 === num % 2 && recordIsOurs(r.q, fp));
+        if (!recs.length) return mapLabel;
+        const parts = buildingParts(fp);
+        const onBldg = r => parts.some(g => feetToPolygon(r.q, g) < 10) ? 0 : 1;   // a record on this building (any piece) comes first
+        const near = r => parts.length ? Math.min(...parts.map(g => feetToPolygon(r.q, g))) : feetBetween(p, r.q);   // how close to the tapped building
+        recs.sort((a, b) => onBldg(a) - onBldg(b) || near(a) - near(b) || Math.abs(a.n - num) - Math.abs(b.n - num));
+        return recs[0].addr.toLowerCase().replace(/\b([a-z])/g, c => c.toUpperCase());
+      } catch (e) { /* try the other copy */ }
+    }
+  } catch (e) { /* keep the map's address */ }
+  return mapLabel;
+  })();
+  // records server slow: wait 4 seconds at most, then use the map's address
+  return Promise.race([stateLookup, new Promise(res => setTimeout(() => res(mapLabel), 4000))]);
+}
+
+// ============================================================
+// A CALL IS SET: box, route, hydrants
+// ============================================================
+let callSeq = 0;
+async function setCall(pt) {
+  const seq = ++callSeq;
+  call = pt; callBox = findBox(pt); routeGeo = null; nearHydrants = null; window._route = null;
+  nearXray = null; nearVacant = null; callAccess = null; callBldgInfo = null;
+  setData('callalley', { type: 'FeatureCollection', features: [] });
+  if (callMarker) callMarker.remove();
+  const el = document.createElement('div'); el.className = 'call-pin';
+  callMarker = new mapboxgl.Marker({ element: el, anchor: 'bottom' }).setLngLat([pt.lng, pt.lat]).addTo(map);
+  hydMarkers.forEach(m => m.remove()); hydMarkers = [];
+  setData('route', { type: 'FeatureCollection', features: [] });
+  refreshBoxFilters();
+  $('sheet').classList.remove('collapsed');
+  renderSheet();
+  fitAll();
+
+  const labelReady = pt.label ? Promise.resolve() :
+    tapLabel(pt).then(l => { if (seq === callSeq && l) { call.label = l; renderSheet(); } }).catch(() => {});
+  loadNearHydrants(seq);
+  loadNearHazards(seq);
+  loadWind();
+  labelReady.then(() => {                                             // route, A side and building record all use the address
+    if (seq !== callSeq) return;
+    runRoute(); loadBuildingAndAccess(seq); loadBuildingInfo(seq);
+  });
+}
+
+function clearCall() {
+  callSeq++; call = null; callBox = null; routeGeo = null; nearHydrants = []; window._route = null;
+  callAccess = null; callBldgInfo = null; setData('callalley', { type: 'FeatureCollection', features: [] });
+  if (callMarker) callMarker.remove(); callMarker = null;
+  showHazards();
+  hydMarkers.forEach(m => m.remove()); hydMarkers = [];
+  setData('route', { type: 'FeatureCollection', features: [] });
+  refreshBoxFilters();
+  $('sheetBody').innerHTML = '<div class="hint">Search a call address, or tap the building on the map.</div>';
+  // back over the firehouse chosen in the "From" bar (same close-up as the opening view, north up)
+  if (window.map) map.flyTo({ center: startCenter(), zoom: 17.15, bearing: 0, pitch: 0 });
+}
+
+async function runRoute() {
+  const seq = callSeq, o = currentOrigin();
+  if (!call || !o) { renderSheet(); return; }
+  window._route = 'loading'; renderSheet();
+  try {
+    // Aim at the front of the building (the address's own street), not whatever road is nearest the pin
+    let dest = [call.lng, call.lat], destDir = null, destStreet = null;
+    try {
+      const front = await frontStreet(call);
+      if (front && (front.ft <= 250 || streetCore(front.p.name) === streetCore(call.label))) { dest = front.c; destDir = (bearing(front.c, [call.lng, call.lat]) + 90) % 360; destStreet = front.p.name; }
+    } catch (e) { /* fall back to the pin */ }
+    // Leave out the front of the firehouse: start on the street in the firehouse's address (e.g. W North Ave)
+    let start = [o.lng, o.lat], startDir = null;
+    if (o.address) {
+      try {
+        o.frontInfo = o.frontInfo || { lng: o.lng, lat: o.lat, label: o.address };
+        const fi = await roadsAround(o.frontInfo);
+        const f = frontOf(o.frontInfo, fi);
+        if (f && feetBetween([o.lng, o.lat], f.c) <= 300) {             // must really be next to the firehouse
+          start = f.c;
+          if (feetBetween([o.lng, o.lat], f.c) > 5) startDir = (bearing([o.lng, o.lat], f.c) + 90) % 360;
+        }
+      } catch (e) { /* fall back to the station point */ }
+    }
+    if (seq !== callSeq) return;
+    const base = `https://api.mapbox.com/directions/v5/mapbox/driving/`;
+    const opts = `geometries=geojson&overview=full&steps=true&access_token=${MAPBOX_TOKEN}`;
+    const r = await fetch(`${base}${start[0]},${start[1]};${dest[0]},${dest[1]}?alternatives=true&${opts}`); const d = await r.json();
+    if (seq !== callSeq) return;
+    if (!r.ok || !d.routes || !d.routes.length) throw new Error(d.message || 'No route found');
+    // The routes a driver would pick: ride the street you leave on as far as it goes toward the call, then turn;
+    // or get onto the call's street early and run along it. The middle point is a pass-through, not a stop.
+    const corners = [];
+    if (startDir != null) corners.push(alongStreet(start, startDir, dest));
+    if (destDir != null) corners.push(alongStreet(dest, destDir, start));
+    const extra = await Promise.all(corners.filter(c => c && feetBetween(c, start) > 250 && feetBetween(c, dest) > 250).map(c =>
+      fetch(`${base}${start[0]},${start[1]};${c[0]},${c[1]};${dest[0]},${dest[1]}?waypoints=0;2&${opts}`)
+        .then(x => x.json()).then(j => (j.routes || [])[0]).catch(() => null)));
+    if (seq !== callSeq) return;
+    const rt = pickRoute(d.routes.concat(extra.filter(Boolean)));
+    // Which way the rig turns pulling out of quarters: facing out the front toward the street, then the route's first heading
+    const dep = rt.legs && rt.legs[0].steps[0] && rt.legs[0].steps[0].maneuver;
+    if (startDir != null && dep && dep.bearing_after != null) {
+      const turn = signedTurn(bearing([o.lng, o.lat], start), dep.bearing_after);
+      rt.outOfQuarters = turn > 30 ? 'Right' : turn < -30 ? 'Left' : 'Straight';
+    }
+    // Which side of the street the building is on when you arrive: the way you're driving vs. the way to the building
+    const steps0 = rt.legs && rt.legs[0].steps, arr = steps0 && steps0[steps0.length - 1].maneuver;
+    if (destDir != null && arr && arr.type === 'arrive' && arr.bearing_before != null && feetBetween(dest, [call.lng, call.lat]) > 5) {
+      const toBldg = bearing(dest, [call.lng, call.lat]), turn = signedTurn(arr.bearing_before, toBldg);
+      if (Math.abs(turn) > 20 && Math.abs(turn) < 160)
+        rt.arriveSide = { side: turn > 0 ? 'right' : 'left', compass: compass(toBldg), street: destStreet };
+    }
+    window._route = rt;
+    routeGeo = { type: 'Feature', properties: {}, geometry: rt.geometry };
+    setData('route', routeGeo);
+  } catch (e) {
+    if (seq !== callSeq) return;
+    window._route = { error: e.message };
+  }
+  renderSheet();
+}
+
+function alongStreet(p, dir, target) {
+  const k = Math.cos(p[1] * Math.PI / 180), r = dir * Math.PI / 180;
+  const ux = Math.sin(r), uy = Math.cos(r);                                  // street direction (east, north)
+  const tx = (target[0] - p[0]) * k * 364000, ty = (target[1] - p[1]) * 364000;
+  const along = tx * ux + ty * uy;                                           // feet along the street
+  if (Math.abs(along) > 5280 * 3) return null;                               // ignore beyond 3 miles
+  return [p[0] + along * ux / (k * 364000), p[1] + along * uy / 364000];
+}
+
+// Route rule: the most direct route with the fewest turns (see pickRoute).
+function countTurns(rt) {
+  const steps = (rt.legs || []).flatMap(l => l.steps || []);
+  return steps.filter(s => {
+    const m = s.maneuver || {}, type = m.type || '', mod = m.modifier || '';
+    if (['depart', 'arrive', 'new name', 'notification'].includes(type)) return false;
+    if ((type === 'continue' || type === 'merge') && (mod === 'straight' || mod === 'slight left' || mod === 'slight right')) return false;
+    return true;
+  }).reduce((n, st) => n + ((st.maneuver || {}).modifier === 'uturn' ? 4 : 1), 0);
+}
+function pickRoute(routes) {
+  // Score = drive time + 30 seconds for every turn (U-turns count as 4 turns). Lowest score wins.
+  // A straighter route on the main street beats a zigzag that's only a little faster on paper.
+  const score = r => r.duration + 30 * countTurns(r);
+  const pick = routes.slice().sort((a, b) => score(a) - score(b))[0];
+  pick.turns = countTurns(pick);
+  return pick;
+}
+
+// Open 311 hydrant reports around the call: Damaged = don't count on it, Leaking / Open (running) = caution
+let near311 = [];   // reports that couldn't be matched to a mapped hydrant
+function fmt311Date(v) {
+  const d = new Date(typeof v === 'number' ? v : Date.parse(v));
+  return isFinite(d) ? d.toLocaleDateString() : '';
+}
+async function hydrant311(w, sth, e, n) {
+  const d = await cityQuery(0, {
+    where: `SRType IN (${SR311_TYPES.map(t => `'${t}'`).join(',')}) AND SRStatus LIKE 'Open%'`,
+    geometry: `${w},${sth},${e},${n}`, geometryType: 'esriGeometryEnvelope', inSR: '4326', spatialRel: 'esriSpatialRelIntersects',
+    outFields: 'SRType,CreatedDate,Address,Latitude,Longitude', returnGeometry: 'true' }, SR311);
+  return (d.features || []).map(f => {
+    const a = f.attributes || {};
+    const q = f.geometry && f.geometry.x != null ? [f.geometry.x, f.geometry.y] : (a.Longitude && a.Latitude ? [Number(a.Longitude), Number(a.Latitude)] : null);
+    const kind = clean(a.SRType).replace(/^WW-Hydrant\s*/i, '');
+    const date = fmt311Date(a.CreatedDate);
+    return q && { q, addr: titleAddr(clean(a.Address)), bad: /damag/i.test(kind),
+      text: `311 report: ${/^open$/i.test(kind) ? 'open / running' : kind.toLowerCase()}${date ? ' since ' + date : ''}` };
+  }).filter(Boolean);
+}
+
+// Intersection for a hydrant the city lists without one: the street it sits on and the nearest cross street (from the map)
+const shortSt = n => {                       // "North Ellamont Street" -> "N Ellamont St"
+  const t = String(n || '').split(/\s+/).filter(Boolean);
+  if (t.length > 2 && DIRS[t[0].toLowerCase()]) t[0] = DIRS[t[0].toLowerCase()].toUpperCase();
+  const last = SUFFIX[(t[t.length - 1] || '').toLowerCase()];
+  if (t.length > 1 && last) t[t.length - 1] = last.charAt(0).toUpperCase() + last.slice(1);
+  return t.join(' ');
+};
+async function hydrantCross(h) {
+  try {
+    const loc = hydrantText(Object.assign({}, h.p, { _inter: null })).loc;
+    if (/[\/&]/.test(loc)) return null;                                   // already an intersection (city data)
+    const here = [h.lng, h.lat];
+    const info = await roadsAround({ lng: h.lng, lat: h.lat }, 200);
+    const named = info.streets.filter(x => x.c && typeof x.c[0] === 'number' && streetCore(x.p.name));
+    if (!named.length) return null;
+    const own = loc === 'Hydrant' ? null : streetCore(loc);
+    const on = (own && named.find(x => streetCore(x.p.name) === own)) || named[0];
+    const others = named.filter(x => streetCore(x.p.name) !== streetCore(on.p.name));
+    // a cross street runs across the hydrant's street, so it lies along the curb, not straight across the street
+    const toOn = bearing(here, on.c);
+    const crossing = on.ft >= 8 ? others.filter(x => { const g = angleGap(bearing(here, x.c), toOn); return g > 40 && g < 140; }) : others;
+    const cross = crossing[0] || others[0];
+    if (!cross) return null;
+    return { street: shortSt(on.p.name), cross: shortSt(cross.p.name), crossFt: cross.ft, addr: loc === 'Hydrant' ? null : loc };
+  } catch (e) { return null; }
+}
+
+// Wind at the call: latest National Weather Service observation (Baltimore Inner Harbor, then BWI)
+const WIND_STATIONS = [['KDMH', 'Inner Harbor'], ['KBWI', 'BWI']];
+let windObs = null, windAt = 0;
+const comp8 = d => ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'][Math.round((((d % 360) + 360) % 360) / 45) % 8];
+async function loadWind() {
+  if (windObs && !windObs.error && Date.now() - windAt < 10 * 60e3) return;   // reuse for 10 minutes
+  for (const [st, name] of WIND_STATIONS) {
+    try {
+      const r = await fetch(`https://api.weather.gov/stations/${st}/observations/latest`);
+      if (!r.ok) continue;
+      const p = (await r.json()).properties || {};
+      const mph = q => q && q.value != null ? (/m_s-1/.test(q.unitCode || '') ? q.value * 2.23694 : q.value * 0.621371) : null;
+      const spd = mph(p.windSpeed);
+      if (spd == null) continue;
+      const gust = mph(p.windGust), dir = p.windDirection ? p.windDirection.value : null;
+      windObs = { spd: Math.round(spd), gust: gust ? Math.round(gust) : null, dir, name,
+                  ageMin: p.timestamp ? Math.max(0, Math.round((Date.now() - Date.parse(p.timestamp)) / 60000)) : null };
+      windAt = Date.now(); renderSheet(); return;
+    } catch (e) { /* try the next station */ }
+  }
+  windObs = { error: true }; renderSheet();
+}
+
+// Is there a main road (e.g. North Ave) between the building and a hydrant? Uses the map's own road lines.
+const MAIN_ROADS = ['motorway', 'trunk', 'primary', 'secondary'];
+function segCross(a, b, c, d) {
+  const o = (p, q, r) => (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0]);
+  return (o(a, b, c) > 0) !== (o(a, b, d) > 0) && (o(c, d, a) > 0) !== (o(c, d, b) > 0);
+}
+function mainRoadBetween(a, b) {
+  let feats;
+  try { feats = map.querySourceFeatures('composite', { sourceLayer: 'road' }); } catch (e) { return null; }
+  for (const f of feats || []) {
+    const pr = f.properties || {};
+    if (!MAIN_ROADS.includes(pr.class) || pr.structure === 'bridge' || pr.structure === 'tunnel') continue;
+    const g = f.geometry || {}, lines = g.type === 'LineString' ? [g.coordinates] : g.type === 'MultiLineString' ? g.coordinates : [];
+    for (const ln of lines) for (let i = 1; i < ln.length; i++) if (segCross(a, b, ln[i - 1], ln[i])) return pr.name ? shortSt(pr.name) : 'a main road';
+  }
+  return null;
+}
+
+async function loadNearHydrants(seq) {
+  const pt = [call.lng, call.lat];
+  near311 = [];
+  const reports = hydrant311(pt[0] - 0.011, pt[1] - 0.011 * 0.77, pt[0] + 0.011, pt[1] + 0.011 * 0.77).catch(() => null);   // runs alongside the hydrant lookup
+  let feats = [];
+  try {
+    for (const d of [0.0037, 0.011]) {           // about 1,000 ft, then about 3,000 ft
+      const dLat = d * 0.77;
+      feats = await hydrantsInBox(pt[0] - d, pt[1] - dLat, pt[0] + d, pt[1] + dLat);
+      if (seq !== callSeq) return;
+      if (feats.length) break;
+    }
+    nearHydrants = feats.map(f => ({ p: f.attributes || {}, lng: f.geometry.x, lat: f.geometry.y,
+      ft: feetBetween(pt, [f.geometry.x, f.geometry.y]) }))
+      .sort((a, b) => a.ft - b.ft).slice(0, 5);
+    nearHydrants.forEach((h, i) => {
+      const t = hydrantText(h.p);
+      const el = document.createElement('div'); el.className = 'hyd-pin' + (t.bad.length ? ' bad' : t.caution.length ? ' caution' : ''); el.textContent = i + 1;
+      hydMarkers.push(new mapboxgl.Marker({ element: el }).setLngLat([h.lng, h.lat])
+        .setPopup(new mapboxgl.Popup({ offset: 14 }).setHTML(hydrantHTML(h.p))).addTo(map));
+    });
+  } catch (e) {
+    if (seq !== callSeq) return;
+    nearHydrants = { error: e.message || String(e) };
+  }
+  renderSheet(); fitAll();
+  // flag hydrants across a main road from the building (checked once the map's road lines are loaded)
+  const checkAcross = () => {
+    if (seq !== callSeq || !Array.isArray(nearHydrants) || !call) return;
+    let changed = false;
+    nearHydrants.forEach((h, i) => {
+      const road = mainRoadBetween([call.lng, call.lat], [h.lng, h.lat]);
+      if ((road || null) === (h.p._across || null)) return;
+      h.p._across = road; changed = true;
+      const t = hydrantText(h.p), m = hydMarkers[i];
+      if (m) { const el = m.getElement(); el.classList.toggle('bad', !!t.bad.length); el.classList.toggle('caution', !t.bad.length && !!t.caution.length); if (m.getPopup()) m.getPopup().setHTML(hydrantHTML(h.p)); }
+    });
+    if (changed) renderSheet();
+  };
+  if (window.map) { checkAcross(); if (map.once) map.once('idle', checkAcross); }
+
+  if (Array.isArray(nearHydrants)) nearHydrants.forEach((h, i) => {
+    hydrantCross(h).then(t => {
+      if (seq !== callSeq || !t) return;
+      h.p._inter = t;
+      const m = hydMarkers[i]; if (m && m.getPopup()) m.getPopup().setHTML(hydrantHTML(h.p));
+      renderSheet();
+    });
+  });
+
+  // 311 reports: each one goes on the mapped hydrant closest to where it was reported (within 150 ft)
+  const reps = await reports;
+  if (seq !== callSeq || !reps || !reps.length || !Array.isArray(nearHydrants)) return;
+  const all = feats.map(f => ({ p: f.attributes || {}, q: [f.geometry.x, f.geometry.y] }));
+  reps.forEach(r => {
+    let best = null, bestFt = Infinity;
+    all.forEach(h => { const ft = feetBetween(r.q, h.q); if (ft < bestFt) { bestFt = ft; best = h; } });
+    if (best && bestFt <= 150) {
+      best.p._311 = best.p._311 || [];
+      if (!best.p._311.some(x => x.text === r.text)) best.p._311.push(r);
+    } else if (feetBetween(pt, r.q) <= 1000) near311.push(r);
+  });
+  nearHydrants.forEach((h, i) => {
+    const t = hydrantText(h.p), m = hydMarkers[i];
+    if (!m) return;
+    const el = m.getElement();   // keep the map's own marker classes
+    el.classList.toggle('bad', !!t.bad.length); el.classList.toggle('caution', !t.bad.length && !!t.caution.length);
+    m.getPopup().setHTML(hydrantHTML(h.p));
+  });
+  renderSheet();
+}
+
+// Street-name matching: "2804 Presbury Street" and "Presbury St" -> ['presbury']
+const SUFFIX = { street: 'st', st: 'st', avenue: 'ave', ave: 'ave', av: 'ave', road: 'rd', rd: 'rd', boulevard: 'blvd', blvd: 'blvd',
+  drive: 'dr', dr: 'dr', lane: 'ln', ln: 'ln', la: 'ln', place: 'pl', pl: 'pl', court: 'ct', ct: 'ct', terrace: 'ter', ter: 'ter',
+  way: 'way', parkway: 'pkwy', pkwy: 'pkwy', highway: 'hwy', hwy: 'hwy', circle: 'cir', cir: 'cir', square: 'sq', alley: 'aly' };
+const DIRS = { north: 'n', n: 'n', south: 's', s: 's', east: 'e', e: 'e', west: 'w', w: 'w' };
+function streetCore(name) {
+  let t = String(name || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/).filter(Boolean);
+  while (t.length && /^\d{5}$/.test(t[t.length - 1])) t.pop();                              // drop a ZIP code
+  while (t.length && /^\d+[a-z]?$/.test(t[0]) && !/(st|nd|rd|th)$/.test(t[0])) t.shift();   // drop the house number
+  if (t.length > 2 && DIRS[t[0]]) t.shift();                                                // leading W / N / ...
+  if (t.length > 1 && SUFFIX[t[t.length - 1]]) t.pop();                                      // trailing St / Ave / ...
+  return t.join(' ');
+}
+
+// One lookup per call of the roads around the address (Mapbox road data), shared by routing and access
+function roadsAround(c, radius = 70) {
+  const key = radius === 70 ? 'roadsPromise' : 'roadsPromise' + radius;
+  if (c[key]) return c[key];
+  const url = `https://api.mapbox.com/v4/mapbox.mapbox-streets-v8/tilequery/${c.lng},${c.lat}.json` +
+    `?radius=${radius}&limit=50&layers=road&geometry=linestring&dedupe=true&access_token=${MAPBOX_TOKEN}`;
+  c[key] = fetch(url).then(async r => {
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.message || ('HTTP ' + r.status));
+    const roads = (d.features || []).map(f => ({ p: f.properties || {}, c: f.geometry && f.geometry.coordinates,
+      ft: Math.round(((f.properties || {}).tilequery || {}).distance * 3.281) })).filter(x => x.c);
+    const isStreet = x => ['street', 'street_limited', 'secondary', 'tertiary', 'primary', 'trunk', 'motorway_link', 'trunk_link',
+      'primary_link', 'secondary_link', 'tertiary_link'].includes(x.p.class) && x.p.name;
+    const isAlley = x => x.p.class === 'service' && x.p.type === 'service:alley';
+    const streets = roads.filter(isStreet).sort((a, b) => a.ft - b.ft);
+    return { streets, alleys: roads.filter(isAlley).sort((a, b) => a.ft - b.ft) };
+  });
+  return c[key];
+}
+
+// Walking route (sidewalks, paths, alleys) through the given points; null if none
+async function walkRoute(points, startBearing) {
+  const brg = startBearing == null ? '' : `&bearings=${Math.round(startBearing)},60${';'.repeat(points.length - 1)}`;
+  const url = `https://api.mapbox.com/directions/v5/mapbox/walking/${points.map(p => p[0] + ',' + p[1]).join(';')}` +
+    `?geometries=geojson&overview=full${brg}&access_token=${MAPBOX_TOKEN}`;
+  const r = await fetch(url); const d = await r.json();
+  if (!r.ok || !d.routes || !d.routes.length) return null;
+  return { geometry: d.routes[0].geometry, ft: Math.round(d.routes[0].distance * 3.281) };
+}
+// Move from point a toward point b by up to `ft` feet (never more than 60% of the way)
+function stepToward(a, b, ft) {
+  const total = feetBetween(a, b);
+  if (!total) return a;
+  const f = Math.min(ft, total * 0.6) / total;
+  return [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f];
+}
+// Signed turn from bearing a to bearing b, -180..180
+const signedTurn = (a, b) => ((b - a + 540) % 360) - 180;
+// The front of the building: closest point on the street named in the address (else the nearest named street)
+// A always goes on the street in the address. If that street isn't within ~230 ft, look farther for it
+// (~650 ft) before falling back to the nearest street.
+async function frontStreet(c) {
+  const info = await roadsAround(c);
+  const core = streetCore(c.label);
+  if (!core) return info.streets[0] || null;
+  let named = info.streets.find(x => streetCore(x.p.name) === core);
+  if (!named) {
+    try { const wide = await roadsAround(c, 200); named = wide.streets.find(x => streetCore(x.p.name) === core); } catch (e) {}
+  }
+  return named || info.streets[0] || null;
+}
+function frontOf(c, info) {
+  const core = streetCore(c.label);
+  const named = core ? info.streets.find(x => streetCore(x.p.name) === core) : null;
+  return named || info.streets[0] || null;
+}
+
+// Where the nearest alley is (rear or side) relative to the address
+async function loadBuildingAndAccess(seq) {
+  const pt = [call.lng, call.lat];
+  const center = pt;
+  try {
+    const info = await roadsAround(call);
+    if (seq !== callSeq) return;
+    const front = await frontStreet(call);
+    // Prefer an alley on the opposite side from the front street (true rear); else the nearest alley
+    const withSide = info.alleys.map(a => {
+      const gap = front ? angleGap(bearing(center, a.c), bearing(center, front.c)) : null;
+      return { a, gap, where: gap == null ? '' : gap >= 120 ? 'rear' : gap >= 50 ? 'side' : 'front side' };
+    });
+    const pick = withSide.find(x => x.where === 'rear') || withSide.find(x => x.where === 'side') || withSide[0];
+    if (!pick) callAccess = { none: true, street: front ? front.p.name : null, front: front ? front.c : null };
+    else callAccess = { ft: pick.a.ft, dir: compass(bearing(center, pick.a.c)), where: pick.where, name: pick.a.p.name || '',
+                        street: front ? front.p.name : null, front: front ? front.c : null, pt: pick.a.c, walks: null };
+    // The building's own outline, so B / C / D sit on its real sides (big buildings) or the neighbors (rowhouses)
+    try { callAccess.fp = await callFootprint(center); } catch (e) { callAccess.fp = null; }
+    callAccess.props = await nearbyProperties(center);
+    if (seq !== callSeq) return;
+    drawFrontBack();
+    renderSheet();
+    fitAll();
+    const walkTo = callAccess.sides && callAccess.sides.walkTo;
+    if (callAccess.front && walkTo && walkOK()) {
+      // FRONT = the sidewalk in front of the building (Alpha side), not the middle of the street
+      callAccess.frontWalk = stepToward(callAccess.front, center, 30);
+      const toBldg = bearing(callAccess.front, center);
+      const dirs = [(toBldg + 90) % 360, (toBldg + 270) % 360];          // the two ways along the front sidewalk
+      const got = await Promise.all(dirs.map(d => walkRoute([callAccess.frontWalk, walkTo], d)
+        .then(w => w && Object.assign(w, { via: '', dir: compass(d) + ' end of the row' })).catch(() => null)));
+      let walks = got.filter(Boolean).filter(w => w.ft < 3000);
+      // If both requests came back the same way, keep one
+      if (walks.length === 2 && Math.abs(walks[0].ft - walks[1].ft) < 15) {
+        const m = w => w.geometry.coordinates[Math.floor(w.geometry.coordinates.length / 2)];
+        if (feetBetween(m(walks[0]), m(walks[1])) < 40) walks = [walks[0]];
+      }
+      if (!walks.length) {
+        const w = await walkRoute([callAccess.frontWalk, walkTo]).catch(() => null);
+        if (w) walks = [Object.assign(w, { via: '', dir: '' })];
+      }
+      walks.sort((x, y) => x.ft - y.ft);
+      walks = walks.slice(0, 1);                                         // keep only the shortest way to the rear
+      if (seq !== callSeq) return;
+      callAccess.walks = walks;
+      drawFrontBack();
+    }
+  } catch (e) {
+    if (seq !== callSeq) return;
+    callAccess = { error: e.message || String(e) };
+  }
+  renderSheet();
+}
+
+// The only access line on the map: front of the building -> address -> rear alley
+// Point `ft` feet from p in compass direction `deg`
+function offsetFeet(p, deg, ft) {
+  const r = deg * Math.PI / 180, dLat = ft / 364000;
+  return [p[0] + Math.sin(r) * dLat / Math.cos(p[1] * Math.PI / 180), p[1] + Math.cos(r) * dLat];
+}
+const ROWHOUSE_FT = 22;   // how far over the B and D labels sit (about one Baltimore rowhouse width)
+
+// The access line plus side labels: A front, B left, C rear, D right (as seen standing on the A side)
+// The city's outline of the building at the address: the building under the pin
+// (a typed address that lands just off a building uses the closest one within ~60 ft)
+// The state's property points near the call (one point per address). Used to find the addresses next door,
+// because the city sometimes draws attached buildings as one outline.
+async function nearbyProperties(pt) {
+  for (const src of MD_PROPERTY_SOURCES) {
+    try {
+      const d = await cityQuery(0, { geometry: `${pt[0]},${pt[1]}`, geometryType: 'esriGeometryPoint', inSR: '4326',
+        spatialRel: 'esriSpatialRelIntersects', distance: '200', units: 'esriSRUnit_Foot', where: '1=1',
+        outFields: 'ADDRESS', returnGeometry: 'true' }, src);
+      return (d.features || []).filter(f => f.geometry && isFinite(f.geometry.x))
+        .map(f => ({ addr: clean(f.attributes && f.attributes.ADDRESS).toUpperCase(), c: [f.geometry.x, f.geometry.y] }));
+    } catch (e) { /* try the other copy */ }
+  }
+  return null;
+}
+
+async function callFootprint(pt) {
+  const d = 0.0015, dLat = d * 0.77;
+  const res = await cityQuery(BUILDINGS_LAYER, { geometry: [pt[0] - d, pt[1] - dLat, pt[0] + d, pt[1] + dLat].join(','),
+    geometryType: 'esriGeometryEnvelope', inSR: '4326', spatialRel: 'esriSpatialRelIntersects', outFields: 'OBJECTID',
+    returnGeometry: 'true', geometryPrecision: '7' });
+  const all = (res.features || []).filter(f => f.geometry && f.geometry.rings && f.geometry.rings.length)
+    .map(f => { const g = esriToGeo(f.geometry.rings); return { g, ft: feetToPolygon(pt, g) }; });
+  const c = all.sort((a, b) => a.ft - b.ft)[0];
+  if (c) c.g.others = all.map(x => x.g);                              // nearby outlines (apartment buildings drawn in pieces)
+  return c && c.ft <= 60 ? c.g : null;
+}
+
+// A point inside the building outline (the middle if it's inside, else the first spot inside heading from the pin)
+function insidePoint(g, pt) {
+  const c = labelPoint(g);
+  if (!c) return pt;
+  if (pointInGeo(c, g)) return c;
+  for (let t = 0.05; t <= 1.001; t += 0.05) {
+    const p = [pt[0] + (c[0] - pt[0]) * t, pt[1] + (c[1] - pt[1]) * t];
+    if (pointInGeo(p, g)) return p;
+  }
+  return c;
+}
+
+// Where A, B, C, D go (and where the walking line should end), seen standing on the A side
+function computeSides() {
+  // The dots go against the sides of the building at the address:
+  // A = middle of the front wall (address's street side), C = middle of the back wall,
+  // B = middle of the left wall, D = middle of the right wall (as seen standing on the A side).
+  const center = [call.lng, call.lat];
+  const facing = bearing(callAccess.front, center), right = (facing + 90) % 360;
+  const k = Math.cos(center[1] * Math.PI / 180);
+  const ax = [Math.sin(right * Math.PI / 180), Math.cos(right * Math.PI / 180)];
+  const bx = [Math.sin(facing * Math.PI / 180), Math.cos(facing * Math.PI / 180)];
+  const toFt = v => [(v[0] - center[0]) * k * 364000, (v[1] - center[1]) * 364000];
+  const R = v => { const f = toFt(v); return f[0] * ax[0] + f[1] * ax[1]; };          // across (left - / right +)
+  const Bk = v => { const f = toFt(v); return f[0] * bx[0] + f[1] * bx[1]; };         // depth (front - / back +)
+  const at = (r, b) => [center[0] + (r * ax[0] + b * bx[0]) / (k * 364000), center[1] + (r * ax[1] + b * bx[1]) / 364000];
+  const g = callAccess.fp;
+  if (!g) {                                                          // no building outline: front / back / sides of the pin
+    const fb = Bk(callAccess.front);
+    return { A: at(0, fb / 2), B: at(-12, 0), D: at(12, 0), C: at(0, -fb / 2), cLabel: 'C', walkTo: null };
+  }
+  const isApt = callBldgInfo && /apartment/i.test(callBldgInfo.text || '');
+  const parts = isApt ? buildingParts(g) : [g];                       // an apartment building drawn in pieces = one building
+  const vs = parts.flatMap(q => (q.type === 'Polygon' ? [q.coordinates] : q.coordinates).flatMap(p => p[0]));
+  let rmin = Math.min(...vs.map(R)), rmax = Math.max(...vs.map(R)), bmin = Math.min(...vs.map(Bk)), bmax = Math.max(...vs.map(Bk));
+  // One outline drawn for several addresses (a row, a strip of stores): the walls are halfway to the addresses next door
+  if (!isApt && callAccess.props && callAccess.props.length) {
+    const num = parseInt(((call.label || '').match(/^\s*(\d+)/) || [])[1], 10), street = streetCore(call.label || '');
+    const pts = callAccess.props.filter(p => street && streetCore(p.addr) === street)
+      .map(p => ({ n: parseInt((p.addr.match(/^\s*(\d+)/) || [])[1], 10), r: R(p.c), b: Bk(p.c) }))
+      .filter(p => p.n && (!num || p.n % 2 === num % 2) && p.r >= rmin - 1 && p.r <= rmax + 1 && p.b >= bmin - 30 && p.b <= bmax + 30);
+    const own = (num && pts.find(p => p.n === num)) || pts.slice().sort((x, y) => Math.abs(x.r) - Math.abs(y.r))[0];
+    if (own) {
+      const left = pts.filter(p => p.r < own.r - 3).sort((x, y) => y.r - x.r)[0];
+      const rgt = pts.filter(p => p.r > own.r + 3).sort((x, y) => x.r - y.r)[0];
+      if (left) rmin = (own.r + left.r) / 2;
+      if (rgt) rmax = (own.r + rgt.r) / 2;
+      const lotBack = bmin + 2 * (own.b - bmin);                      // the address point sits mid-lot: the lot ends about twice as deep
+      if (own.b > bmin + 5 && lotBack < bmax) bmax = lotBack;
+    }
+  }
+  const midR = (rmin + rmax) / 2, midB = (bmin + bmax) / 2, e = 6;      // e: just outside the wall so the dot sits against it
+  const A = at(midR, bmin - e), C = at(midR, bmax + e), B = at(rmin - e, midB), D = at(rmax + e, midB);
+  return { A, B, C, D, cLabel: 'C', walkTo: C };
+}
+
+// The yellow A-to-C walking line and walk distance are turned off everywhere
+function walkOK() { return false; }
+
+// The access line plus side labels: A front, B left, C rear, D right (as seen standing on the A side)
+function drawFrontBack() {
+  const fc = { type: 'FeatureCollection', features: [] };
+  const mark = (label, c) => fc.features.push({ type: 'Feature', properties: { label }, geometry: { type: 'Point', coordinates: c } });
+  if (call && callAccess && callAccess.front) {
+    const sd = computeSides();
+    callAccess.sides = sd;
+    (walkOK() ? callAccess.walks || [] : []).forEach(w => fc.features.push({ type: 'Feature', properties: {}, geometry: w.geometry }));
+    mark('A', sd.A); mark('B', sd.B); mark('D', sd.D); mark(sd.cLabel, sd.C);
+    // the call pin sits directly above the A dot (on screen), so it's in the same spot every call
+    if (callMarker && sd.A) { callMarker.setLngLat(sd.A); callMarker.setOffset([0, -9]); }
+  }
+  if (callAccess) callAccess.line = fc;
+  setData('callalley', fc);
+  showHazards();                                                 // call address dots go above the location pin
+}
+
+// ---------- Building description (Maryland property records, the same data SDAT uses) ----------
+// The state publishes the same data on two servers; try both
+const MD_PROPERTY_SOURCES = ['https://mdgeodata.md.gov/imap/rest/services/PlanningCadastre/MD_PropertyData/MapServer',
+                             'https://geodata.md.gov/imap/rest/services/PlanningCadastre/MD_PropertyData/MapServer'];
+const BLDG_FIELDS = 'ADDRESS,STRTNUM,STRTNAM,DESCSTYL,STRUSTYL,DESCBLDG,STRUBLDG,DESCCNST,BLDG_STORY,BLDG_UNITS,DESCLU,DESCCIUSE,YEARBLT';
+
+async function loadBuildingInfo(seq) {
+  const pt = [call.lng, call.lat];
+  // The pin often lands on the sidewalk; big complexes are recorded under one address in the middle of the lot.
+  // So look records up from a point inside the building's own outline.
+  let fpG = null;
+  try { fpG = await callFootprint(pt); } catch (e) { /* use the pin */ }
+  if (seq !== callSeq) return;
+  const inPt = fpG ? insidePoint(fpG, pt) : pt;
+  const near = { geometry: `${inPt[0]},${inPt[1]}`, geometryType: 'esriGeometryPoint', inSR: '4326',
+                 spatialRel: 'esriSpatialRelIntersects', units: 'esriSRUnit_Meter', outFields: BLDG_FIELDS, returnGeometry: 'true' };
+  const num = ((call.label || '').match(/^\s*(\d+)/) || [])[1];
+  const street = streetCore(call.label || '').split(' ')[0];
+  let stateErr = null;
+  // 1) State property records (style, stories, construction, units)
+  for (const src of MD_PROPERTY_SOURCES) {
+    try {
+      let recs = [];
+      if (num && street) {
+        const d = await cityQuery(0, Object.assign({}, near, { distance: '300',
+          where: `ADDRESS LIKE '${num} %${street.toUpperCase().replace(/'/g, "''")}%'` }), src);
+        recs = d.features || [];
+      }
+      if (!recs.length) {
+        const d = await cityQuery(0, Object.assign({}, near, { distance: '35', where: '1=1' }), src);
+        const onStreet = streetCore(call.label || '');
+        recs = (d.features || []).filter(f => f.geometry && recordIsOurs([f.geometry.x, f.geometry.y], fpG)   // never a record on a different building
+            && (!onStreet || !f.attributes || streetCore(f.attributes.ADDRESS) === onStreet))               // and only on the call's street
+          .sort((a, b) => feetBetween(inPt, [a.geometry.x, a.geometry.y]) - feetBetween(inPt, [b.geometry.x, b.geometry.y]));
+      }
+      if (seq !== callSeq) return;
+      if (recs.length) {
+        callBldgInfo = describeBuilding(recs[0].attributes || {});
+        // State record doesn't say row or detached: get floors and row position from the city's building outline
+        if (/not on record/.test(callBldgInfo.text)) {
+          try {
+            const city = await describeFromCity(pt, inPt);
+            if (seq !== callSeq) return;
+            if (city && /rowhouse|single-family/.test(city.text)) callBldgInfo = { text: city.text, detail: callBldgInfo.detail };
+          } catch (e) { /* keep the state description */ }
+        }
+        if (callAccess && callAccess.front) { drawFrontBack(); if (/apartment/i.test(callBldgInfo.text || '')) fitAll(); } renderSheet(); return;
+      }
+      stateErr = stateErr || 'no record';
+      break;                                   // server answered but had nothing; don't ask the other copy
+    } catch (e) { stateErr = e.message || String(e); }
+  }
+  // 2) Backup: build it from the city's own data (works where the state's servers refuse the app)
+  try {
+    const info = await describeFromCity(pt, inPt);
+    if (seq !== callSeq) return;
+    callBldgInfo = info || { none: true };
+    if (callAccess && callAccess.front) drawFrontBack();
+  } catch (e) {
+    if (seq !== callSeq) return;
+    callBldgInfo = { error: stateErr ? `state: ${stateErr}; city: ${e.message || e}` : (e.message || String(e)) };
+  }
+  renderSheet();
+}
+
+// City data: stories from building outlines, middle/end of group from shared walls, units from Real Property
+async function describeFromCity(pt, inPt) {
+  inPt = inPt || pt;
+  const d = 0.0006, dLat = d * 0.77;
+  const [fp, rp] = await Promise.all([
+    cityQuery(BUILDINGS_LAYER, { geometry: [pt[0] - d, pt[1] - dLat, pt[0] + d, pt[1] + dLat].join(','), geometryType: 'esriGeometryEnvelope',
+      inSR: '4326', spatialRel: 'esriSpatialRelIntersects', outFields: 'NUMSTORIES,BLDGHEIGHT', returnGeometry: 'true', geometryPrecision: '7' }),
+    cityQuery(12, { geometry: `${inPt[0]},${inPt[1]}`, geometryType: 'esriGeometryPoint', inSR: '4326', spatialRel: 'esriSpatialRelIntersects',
+      outFields: 'FULLADDR,PROPDESC,DWELUNIT,EFF_UNIT,ROOMUNIT,USEGROUP,YEAR_BUILD,STRUCTAREA', returnGeometry: 'false' }, VACANT_SVC)
+      .catch(() => ({ features: [] }))
+  ]);
+  const bldgs = (fp.features || []).filter(f => f.geometry && f.geometry.rings && f.geometry.rings.length)
+    .map(f => ({ a: f.attributes || {}, g: esriToGeo(f.geometry.rings) }));
+  const prop = ((rp.features || [])[0] || {}).attributes || {};
+  if (!bldgs.length && !Object.keys(prop).length) return null;
+  bldgs.forEach(b => b.ft = feetToPolygon(pt, b.g));
+  bldgs.sort((x, y) => x.ft - y.ft);
+  const me = bldgs.find(b => inPt !== pt && pointInGeo(inPt, b.g)) || (bldgs[0] && bldgs[0].ft <= 60 ? bldgs[0] : null);
+
+  // stories
+  let stories = me ? Number(me.a.NUMSTORIES) : 0;
+  if (!(stories > 0) && me && Number(me.a.BLDGHEIGHT) > 0) stories = Math.max(1, Math.round(Number(me.a.BLDGHEIGHT) / 10));
+  const st = stories > 0 ? `${stories}-story ` : '';
+  const units = Number(prop.DWELUNIT) || 0;
+  const desc = clean(prop.PROPDESC).toUpperCase();
+
+  // row position
+  let pos = null, areaFt = 0;
+  if (me) {
+    const ringsOf = g => (g.type === 'Polygon' ? [g.coordinates] : g.coordinates).map(p => p[0]);
+    const touches = (g1, g2) => ringsOf(g1).some(r => r.some(v => feetToPolygon(v, g2) < 2));
+    const neighbors = bldgs.filter(b => b !== me && (touches(me.g, b.g) || touches(b.g, me.g))).length;
+    // Is this outline one whole row (one long block)? Then judge by where the address sits along it.
+    const k = Math.cos(pt[1] * Math.PI / 180), vs = ringsOf(me.g)[0].map(v => [(v[0] - pt[0]) * k * 364000, (v[1] - pt[1]) * 364000]);
+    const mx = vs.reduce((s, v) => s + v[0], 0) / vs.length, my = vs.reduce((s, v) => s + v[1], 0) / vs.length;
+    let sxx = 0, syy = 0, sxy = 0; vs.forEach(([x, y]) => { sxx += (x - mx) ** 2; syy += (y - my) ** 2; sxy += (x - mx) * (y - my); });
+    const ang = 0.5 * Math.atan2(2 * sxy, sxx - syy), ux = Math.cos(ang), uy = Math.sin(ang);
+    const along = vs.map(([x, y]) => x * ux + y * uy), across = vs.map(([x, y]) => -x * uy + y * ux);
+    const L = Math.max(...along) - Math.min(...along), W = Math.max(...across) - Math.min(...across);
+    for (let i = 0; i < vs.length - 1; i++) areaFt += vs[i][0] * vs[i + 1][1] - vs[i + 1][0] * vs[i][1];
+    areaFt = Math.abs(areaFt) / 2;
+    if (L > 90 && L > 2.2 * W && W < 90 && !(stories >= 4)) {          // a row of houses drawn as one outline (rowhouses are 3 stories or less)
+      const fromEnd = Math.min(0 - Math.min(...along), Math.max(...along) - 0);   // the address is at 0
+      pos = fromEnd < 25 ? 'end' : 'middle';
+    } else {
+      pos = areaFt > 3500 ? 'large' : neighbors >= 2 ? 'middle' : neighbors === 1 ? 'end' : 'detached';   // rowhouses are well under 3,500 sq ft
+    }
+  }
+  let text;
+  if (/APT|APART/.test(desc)) text = `${st}apartment complex`;
+  else if (/COMM|STORE|OFFICE|RETAIL|INDUST|WAREH|CHURCH|SCHOOL/.test(desc)) text = `${st}${clean(prop.PROPDESC).toLowerCase()}`;
+  else if (pos === 'middle') text = `${st}middle-of-group rowhouse`;
+  else if (pos === 'end') text = `${st}end-of-group rowhouse`;
+  else if (pos === 'large' || (pos === 'detached' && stories >= 4)) text = `${st}large building · apartments or commercial (type not on record)`;
+  else if (pos === 'detached') text = `${st}single-family (detached)`;
+  else text = `${st}building`;
+  const yr = Number(prop.YEAR_BUILD);
+  const detail = [titleAddr(clean(prop.FULLADDR)), yr > 1700 ? `built ${yr}` : '', clean(prop.PROPDESC), 'from city records · construction not listed']
+    .filter(Boolean).join(' · ');
+  return { text: text.charAt(0).toUpperCase() + text.slice(1), detail };
+}
+
+function describeBuilding(a) {
+  const words = [a.DESCSTYL, a.DESCBLDG, a.DESCLU, a.DESCCIUSE].map(clean).join(' | ').toLowerCase();
+  const cn = clean(a.DESCCNST).toLowerCase();
+  let stories = parseFloat(a.BLDG_STORY);
+  if (!(stories > 0)) { const m = words.match(/(\d+(?:\.\d)?)\s*(?:story|stories|sty)/); stories = m ? parseFloat(m[1]) : null; }
+  const units = parseInt(a.BLDG_UNITS, 10) || null;
+  const st = stories > 0 ? `${Math.floor(stories)}${stories % 1 ? '½' : ''}-story ` : '';
+  const woodish = /frame|siding|wood|shingle|asbestos/.test(cn);
+  const constr = /brick/.test(cn) ? (woodish ? 'brick and frame' : 'brick')
+    : /stone/.test(cn) ? (woodish ? 'stone and frame' : 'stone')
+    : woodish ? 'wood frame' : /block/.test(cn) ? 'block' : /stucco/.test(cn) ? 'stucco' : '';
+  let text, other = false;
+  // What the building is, from the record's building-type field ("SAFETY Fire Station", "STORE Retail Store", "DWEL Center Unit"...)
+  const bldg = clean(a.DESCBLDG), kind = bldg.replace(/^[A-Z]{2,}\s+/, '');   // drop the short code in front
+  const bw = [a.DESCSTYL, a.DESCBLDG].map(clean).join(' | ').toLowerCase();
+  if (/high.?rise|apartment|\bapts?\b|elevator|garden apt/.test(bw)) {
+    text = `${st}apartment complex${/condo/.test(bw) ? ' (condos)' : ''}`;
+  } else if (bldg && !/^DWEL\b/i.test(bldg) && !/dwelling|town ?house|row ?house|unit\b/i.test(kind)) {
+    text = `${st}${kind.toLowerCase()}`; other = true;                 // fire station, retail store, church...
+  } else if (/end unit|end of group|end group|end row/.test(words)) {
+    text = `${st}end-of-group rowhouse`;
+  } else if (/center unit|centre unit|middle|interior unit|inside unit|mid.?group/.test(words)) {
+    text = `${st}middle-of-group rowhouse`;
+  } else if (/town ?house|row ?house|\brow\b|condo town/.test(words)) {
+    text = `${st}rowhouse`;
+  } else if (/standard unit|detached|single|split|cape|colonial|bungalow/.test(words)) {
+    text = `${st}single-family`;
+  } else if (/residential|dwelling/.test(words)) {
+    text = `${st}residential (row or detached not on record)`;
+  } else {
+    text = clean(a.DESCCIUSE) || clean(a.DESCLU) || 'Building type not recorded'; other = true;
+  }
+  if (constr && !other && !(constr === 'wood frame' && /rowhouse/.test(text))) text += /single-family$/.test(text) ? `, ${constr}` : ` · ${constr}`;
+  const yr = parseInt(a.YEARBLT, 10);
+  const detail = [titleAddr(clean(a.ADDRESS)), yr > 1700 ? `built ${yr}` : '', [clean(a.DESCSTYL), clean(a.DESCBLDG), clean(a.DESCCNST)].filter(Boolean).join(' / ')]
+    .filter(Boolean).join(' · ');
+  return { text: text.charAt(0).toUpperCase() + text.slice(1), detail };
+}
+
+async function loadNearHazards(seq) {
+  const pt = [call.lng, call.lat], d = 0.0025, dLat = d * 0.77;     // about 700 ft around the call
+  const box = [pt[0] - d, pt[1] - dLat, pt[0] + d, pt[1] + dLat];
+  const near = feats => feats.map(f => ({ p: f.attributes || {}, lng: f.geometry.x, lat: f.geometry.y,
+    ft: feetBetween(pt, [f.geometry.x, f.geometry.y]) })).sort((a, b) => a.ft - b.ft);
+  await Promise.all([
+    pointsInBox(XRAY_SVC, 0, ...box).then(f => { if (seq === callSeq) nearXray = near(f).filter(h => h.ft <= 600).slice(0, 6); })
+      .catch(e => { if (seq === callSeq) nearXray = { error: e.message || String(e) }; }),
+    pointsInBox(VACANT_SVC, 1, ...box).then(f => { if (seq === callSeq) nearVacant = near(f).filter(h => h.ft <= 300); })
+      .catch(e => { if (seq === callSeq) nearVacant = { error: e.message || String(e) }; })
+  ]);
+  if (seq === callSeq) renderSheet();
+}
+
+function fitAll() {
+  if (!call) return;
+  // Close-up centered on the building: frame A, B, C, D evenly around the address
+  const c0 = [call.lng, call.lat];
+  const b = new mapboxgl.LngLatBounds(c0, c0);
+  const facing = callAccess && callAccess.front ? bearing(callAccess.front, c0) : 0;   // A side at the bottom, C at the top
+  if (callAccess && callAccess.front) {
+    // farthest of A / C, plus room so the B and D houses aren't cut off
+    const marks = callAccess.sides ? [callAccess.sides.A, callAccess.sides.B, callAccess.sides.C, callAccess.sides.D]
+                                   : [stepToward(callAccess.front, c0, 30)].concat(callAccess.pt ? [callAccess.pt] : []);
+    const reach = Math.max(...marks.map(m => feetBetween(c0, m)), 45) * 1.35 + 15;
+    [0, 90, 180, 270].forEach(t => b.extend(offsetFeet(c0, (facing + t) % 360, reach)));
+  }
+  const wide = window.innerWidth >= 820;
+  const padding = { top: $('topbar').offsetHeight + 20, bottom: wide ? 40 : Math.min($('sheet').offsetHeight, window.innerHeight * 0.5) + 20,
+                    left: wide ? 420 : 20, right: 20 };
+
+  // The normal close-up zoom
+  let zoom = 18.7;
+  try {
+    const cam = map.cameraForBounds(b, { padding, bearing: facing, maxZoom: 18.7 });
+    if (cam && isFinite(cam.zoom)) zoom = Math.max(Math.min(cam.zoom, 18.7), 17);   // a call always opens close up
+  } catch (e) { /* keep the default */ }
+
+  // Make sure A, B, C and D all show in the map area between the top bars and the bottom panel
+  if (callAccess && callAccess.sides) {
+    const s = callAccess.sides, margin = 30;
+    const halfW = (window.innerWidth - padding.left - padding.right) / 2 - margin;
+    const halfH = (window.innerHeight - padding.top - padding.bottom) / 2 - margin;
+    let ftPerPx = 0;
+    [s.A, s.B, s.C, s.D].forEach(m => {
+      const d = feetBetween(c0, m), t = (bearing(c0, m) - facing) * Math.PI / 180;
+      ftPerPx = Math.max(ftPerPx, Math.abs(d * Math.sin(t)) / Math.max(halfW, 40), Math.abs(d * Math.cos(t)) / Math.max(halfH, 40));
+    });
+    const need = ftPerPx > 0 ? Math.log2(78271.517 * Math.cos(c0[1] * Math.PI / 180) * 3.281 / ftPerPx) : 18.7;
+    if (isFinite(need)) zoom = Math.max(Math.min(zoom, need), 16.5);
+  }
+
+  // Only if hydrant #1 would fall off screen at that zoom, zoom out just enough to show it (house stays centered)
+  const h1 = Array.isArray(nearHydrants) && nearHydrants[0];
+  if (h1 && h1.ft <= 400) {
+    const d = feetBetween(c0, [h1.lng, h1.lat]), t = (bearing(c0, [h1.lng, h1.lat]) - facing) * Math.PI / 180;
+    const right = Math.abs(d * Math.sin(t)), up = Math.abs(d * Math.cos(t));          // feet across / up the screen
+    const margin = 28;                                                                 // room for the hydrant badge
+    const halfW = (window.innerWidth - padding.left - padding.right) / 2 - margin;
+    const halfH = (window.innerHeight - padding.top - padding.bottom) / 2 - margin;
+    const ftPerPx = Math.max(right / Math.max(halfW, 40), up / Math.max(halfH, 40));
+    const fitZoom = Math.log2(78271.517 * Math.cos(c0[1] * Math.PI / 180) * 3.281 / ftPerPx);
+    if (isFinite(fitZoom) && fitZoom < zoom) zoom = Math.max(fitZoom, 17);   // never zoom out past a close street view for a hydrant
+  }
+  map.easeTo({ center: c0, zoom, bearing: facing, pitch: 0, padding, duration: 700 });
+}
+
+// ============================================================
+// BOTTOM SHEET
+// ============================================================
+// City data comes in ALL CAPS: "2901 W NORTH AVE / BLOOMINGDALE RD" -> "2901 W North Ave / Bloomingdale Rd"
+function titleAddr(a) {
+  return String(a == null ? '' : a).toLowerCase().replace(/[a-z][a-z']*/g, w =>
+    /^[nsew]$/.test(w) ? w.toUpperCase() : /^mc[a-z]/.test(w) ? 'Mc' + w.charAt(2).toUpperCase() + w.slice(3) : w.charAt(0).toUpperCase() + w.slice(1))
+    .replace(/(\d)(St|Nd|Rd|Th)\b/g, (m, d, o) => d + o.toLowerCase());   // 33rd, 1st
+}
+function hydrantText(p) {
+  const it = p._inter;                                            // intersection worked out from the map (no cross street on file)
+  const base = titleAddr(clean(p.CAD_ADDR) || [clean(p.STREET_NUM), clean(p.STREET_NAM)].filter(Boolean).join(' ') || clean(p.LOCATION_1)) || 'Hydrant';
+  const baseSt = base.replace(/^\d+[a-z]?\s+/i, ''), xst = titleAddr(clean(p.CROSS_STRE));
+  // always show it as an intersection: "Street / Cross St"
+  const loc = /[\/&]/.test(base) ? base
+    : it ? `${it.street} / ${it.cross}`
+    : (xst && base !== 'Hydrant') ? `${baseSt} / ${xst}` : base;
+  const atAddr = !/[\/&]/.test(base) && /^\d/.test(base) && loc !== base ? `at ${base}` : '';
+  const corner = [clean(p.CORNER_POS), titleAddr(clean(p.CROSS_STRE))].filter(Boolean).join(' corner, cross st ');
+  const near = [atAddr, it && it.crossFt > 60 ? `mid-block, ${Math.round(it.crossFt / 10) * 10} ft from ${it.cross}` : ''].filter(Boolean).join(' · ');
+  const desc = /^null$/i.test(clean(p.LOCATION_D)) ? '' : clean(p.LOCATION_D);   // the city sometimes stores the word "NULL"
+  const extra = [corner, near, desc].filter(Boolean).join(' · ');
+  const mainIn = Number(p.SRC_MAIN_S);
+  const main = mainIn > 0 ? `${p.SRC_MAIN_S}" main` : '';
+  // Warnings: "bad" ones mean don't count on it; "caution" ones are usable but worth knowing
+  const bad = [], caution = [];
+  const status = clean(p.FEAT_STATU).toUpperCase();
+  if (status && status !== 'ACT') bad.push(status === 'ABN' ? 'Abandoned' : status === 'INA' ? 'Inactive' : 'Status: ' + status);
+  if (p.DATEABANDO) bad.push('Marked abandoned');
+  const cond = clean(p.CONDITION), svc = clean(p.SERVICE);
+  if (cond) (/(OOS|OUT|BAD|BROKE|DAMAG|DEFECT|INOP)/i.test(cond) ? bad : caution).push(cond);
+  if (svc) (/(OOS|OUT|NO|INOP)/i.test(svc) ? bad : caution).push(svc);
+  const owner = clean(p.RESP_AGENC).toUpperCase();
+  if (owner === 'PRI') caution.push('Private hydrant');
+  if (owner === 'BCO') caution.push('County hydrant');
+  if (mainIn > 0 && mainIn < 6) caution.push(`Small main (${mainIn}")`);
+  (p._311 || []).forEach(r => (r.bad ? bad : caution).push(r.text));
+  if (p._across) caution.push(`Across ${p._across} (main road)`);
+  return { loc, extra, main, bad: [...new Set(bad)], caution: [...new Set(caution)], id: clean(p.HYDRANT_ID) };
+}
+function hydrantHTML(p) {
+  const t = hydrantText(p);
+  const warn = t.bad.concat(t.caution);
+  return `<b>${esc(t.loc)}</b>${t.extra ? `<br>${esc(t.extra)}` : ''}` +
+    `${t.main ? `<br>${esc(t.main)}` : ''}${warn.length ? `<br><b style="color:${t.bad.length ? '#f87171' : '#fbbf24'}">⚠ ${esc(warn.join(' · '))}</b>` : ''}` +
+    `${t.id ? `<br><span style="color:#9aa3b2">ID ${esc(t.id)}</span>` : ''}`;
+}
+// Street View standing on the A side, looking at the building
+function streetViewUrl() {
+  const at = callAccess && callAccess.front ? callAccess.front : [call.lng, call.lat];
+  const head = callAccess && callAccess.front ? Math.round(bearing(callAccess.front, [call.lng, call.lat])) : 0;
+  return `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${at[1].toFixed(6)},${at[0].toFixed(6)}&heading=${head}&pitch=10&fov=80`;
+}
+// Google Earth, tilted 3D view of the address from the A side
+function earthUrl() {
+  const head = callAccess && callAccess.front ? Math.round(bearing(callAccess.front, [call.lng, call.lat])) : 0;
+  return `https://earth.google.com/web/@${call.lat.toFixed(6)},${call.lng.toFixed(6)},30a,180d,35y,${head}h,60t,0r`;
+}
+function fmtDate(v) { const d = new Date(Number(v)); return isFinite(d) && v ? d.toLocaleDateString() : ''; }
+function xrayHTML(p) {
+  const notes = clean(p.szText);
+  return `<b style="color:#fda4af">${esc(clean(p.szType) || 'Hazard building')}</b><br>${esc(titleAddr(clean(p.szLocation) || [p.nHouseNum, p.szStreet].filter(Boolean).join(' ')))}` +
+    `${fmtDate(p.ltEntryDate) ? `<br><span style="color:#9aa3b2">Entered ${fmtDate(p.ltEntryDate)}</span>` : ''}` +
+    `${notes ? `<br>${esc(notes.length > 240 ? notes.slice(0, 240) + '…' : notes)}` : ''}`;
+}
+function vacantHTML(p) {
+  return `<b>Vacant building notice</b><br>${esc(titleAddr(clean(p.Address)))}` +
+    `${fmtDate(p.DateNotice) ? `<br><span style="color:#9aa3b2">Notice ${fmtDate(p.DateNotice)}${clean(p.NoticeNum) ? ' · #' + esc(clean(p.NoticeNum)) : ''}</span>` : ''}`;
+}
+function fmtMin(sec) { const m = Math.round(sec / 60); return m < 1 ? '<1 min' : m + ' min'; }
+function fmtMi(m) { const mi = m / 1609.34; return (mi < 0.1 ? Math.round(m * 3.281) + ' ft' : mi.toFixed(1) + ' mi'); }
+
+// "2902 W NORTH AVE, BAL" and "2902 West North Avenue" are the same address; East vs West are not
+function addrParts(a) {
+  const t = String(a || '').split(',')[0].toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/).filter(Boolean);
+  const num = /^\d+$/.test(t[0] || '') ? t[0] : null;
+  const dir = t.length > 2 && DIRS[t[1]] ? DIRS[t[1]] : null;
+  return { num, dir, core: streetCore(t.join(' ')) };
+}
+function sameStreet(x, y) { return !!(x.core && x.core === y.core && (!x.dir || !y.dir || x.dir === y.dir)); }
+function sameAddr(a, b) { const x = addrParts(a), y = addrParts(b); return !!(x.num && x.num === y.num && sameStreet(x, y)); }
+// same block = same street, same hundred (2900 block of W North Ave, either side)
+function sameBlock(a, b) { const x = addrParts(a), y = addrParts(b); return !!(x.num && y.num && Math.floor(x.num / 100) === Math.floor(y.num / 100) && sameStreet(x, y)); }
+
+function renderSheet() {
+  if (!call) return;
+  const o = currentOrigin();
+  const rt = window._route;
+  const label = call.label || `${call.lat.toFixed(5)}, ${call.lng.toFixed(5)}`;
+  const boxTxt = callBox ? callBox.box : (boxes ? 'Outside city boxes' : '<span class="loading">loading…</span>');
+  const house = callBox ? callBox.house : (boxes ? '—' : '<span class="loading">loading…</span>');
+
+  let routeTxt = '<span class="loading">routing…</span>';
+  if (!o) routeTxt = 'Waiting for GPS…';
+  else if (rt && rt.error) routeTxt = 'No route: ' + esc(rt.error);
+  else if (rt && rt.duration != null) routeTxt = `${fmtMi(rt.distance)} · about ${fmtMin(rt.duration)}`;
+
+  const dest = `${call.lat},${call.lng}`;
+  let hyd = '<div class="loading">Finding hydrants…</div>';
+  if (nearHydrants && nearHydrants.error) {
+    hyd = `<div class="hint" style="color:#fca5a5">Couldn't load hydrants from the city's server: ${esc(nearHydrants.error)}</div>`;
+  } else if (Array.isArray(nearHydrants)) {
+    const ts = nearHydrants.map(h => hydrantText(h.p));
+    let hydAlert = '';
+    if (ts.length && ts[0].bad.length) {
+      const ok = ts.findIndex(t => !t.bad.length);
+      hydAlert = `<div class="warnbar bad">⚠ Closest hydrant is flagged (${esc(ts[0].bad.join(', '))}).` +
+        (ok >= 0 ? ` Nearest usable: #${ok + 1}, ${Math.round(nearHydrants[ok].ft)} ft.` : ' No unflagged hydrant in this list.') + '</div>';
+    }
+    hyd = nearHydrants.length ? hydAlert + nearHydrants.map((h, i) => {
+      const t = ts[i];
+      const lengths = Math.max(1, Math.ceil(h.ft / HOSE_LENGTH_FT));
+      const numCls = t.bad.length ? 'num bad' : t.caution.length ? 'num caution' : 'num';
+      const warn = t.bad.map(w => `<div class="hwarn bad">⚠ ${esc(w)}</div>`).join('') + t.caution.map(w => `<div class="hwarn caution">⚠ ${esc(w)}</div>`).join('');
+      return `<div class="hyd" data-h="${i}"><div class="${numCls}">${i + 1}</div><div>
+        <div class="main">${esc(t.loc)} <span class="tag">${Math.round(h.ft)} ft · ${lengths} section${lengths > 1 ? 's' : ''}</span>${t.main ? `<span class="tag">${esc(t.main)}</span>` : ''}</div>
+        ${warn}${t.extra ? `<div class="sub">${esc(t.extra)}</div>` : ''}</div></div>`;
+    }).join('') : '<div class="hint">No hydrants found within about 3,000 ft.</div>';
+    if (near311.length) hyd += near311.map(r =>
+      `<div class="hwarn ${r.bad ? 'bad' : 'caution'}" style="margin-top:6px">⚠ ${esc(r.text)} near ${esc(r.addr || 'here')} (not matched to a mapped hydrant)</div>`).join('');
+  }
+
+  let bldgInfoTxt = '<span class="loading">checking property records…</span>', bldgInfoSub = '';
+  if (callBldgInfo && callBldgInfo.error) bldgInfoTxt = `<span style="color:#fca5a5;font-size:14px">Couldn't load property records: ${esc(callBldgInfo.error)}</span>`;
+  else if (callBldgInfo && callBldgInfo.none) bldgInfoTxt = '<span style="font-size:15px">No property record found here</span>';
+  else if (callBldgInfo) { bldgInfoTxt = esc(callBldgInfo.text); bldgInfoSub = callBldgInfo.detail ? `<small class="statsub">${esc(callBldgInfo.detail)}</small>` : ''; }
+
+  let haz = '<div class="loading">Checking hazard and vacant buildings…</div>', hazAlert = '';
+  if (nearXray !== null || nearVacant !== null) {
+    const parts = [];
+    if (nearXray && nearXray.error) parts.push(`<div class="hint" style="color:#fca5a5">Couldn't load Code X-Ray data: ${esc(nearXray.error)}</div>`);
+    else if (Array.isArray(nearXray)) {
+      const onBlock = call.label ? nearXray.filter(h => {
+        const where = clean(h.p.szLocation) || [h.p.nHouseNum, h.p.szStreet].filter(Boolean).join(' ');
+        return sameBlock(where, call.label) && !sameAddr(where, call.label);
+      }) : [];
+      const seen = new Set();
+      const items = onBlock.map(h => {
+        const where = titleAddr((clean(h.p.szLocation) || [h.p.nHouseNum, h.p.szStreet].filter(Boolean).join(' ')).split(',')[0]);
+        const t = clean(h.p.szType) || 'Hazard';
+        return `${/^DNG$|UNSAFE|DANGER/i.test(t) ? 'DANGEROUS CONDITION' : esc(t.toUpperCase())} at ${esc(where)}`;
+      }).filter(x => !seen.has(x) && seen.add(x));
+      if (items.length)
+        hazAlert = `<div style="background:#4c0519;border:1px solid #e11d48;border-radius:10px;padding:8px 10px;margin:8px 0;font-weight:700">⚠ On this block: ${items.join(' · ')}</div>`;
+      parts.push(nearXray.length ? nearXray.map(h => {
+        const t = clean(h.p.szType) || 'Hazard', unsafe = /^DNG$|UNSAFE|DANGER/i.test(t);   // DNG = dangerous condition
+        const notes = clean(h.p.szText);
+        return `<div class="hyd"><div class="num" style="background:${unsafe ? '#e11d48' : '#e11d48'};color:#fff">${unsafe ? 'D' : 'X'}</div><div>
+          <div class="main">${esc(titleAddr(clean(h.p.szLocation) || [h.p.nHouseNum, h.p.szStreet].filter(Boolean).join(' ')))} <span class="tag" style="background:#4c0519;color:#fda4af">${esc(t)}</span>${call.label && sameAddr(clean(h.p.szLocation) || [h.p.nHouseNum, h.p.szStreet].filter(Boolean).join(' '), call.label) ? '<span class="tag thisaddr">THIS ADDRESS</span>' : `<span class="tag">${Math.round(h.ft)} ft</span>`}</div>
+          ${notes ? `<div class="sub">${esc(notes.length > 140 ? notes.slice(0, 140) + '…' : notes)}</div>` : ''}</div></div>`;
+      }).join('') : '<div class="hint">No Code X-Ray, Code X or Unsafe buildings within 600 ft.</div>');
+    } else parts.push('<div class="loading">Checking Code X-Ray buildings…</div>');
+    if (nearVacant && nearVacant.error) parts.push(`<div class="hint" style="color:#fca5a5">Couldn't load vacant building data: ${esc(nearVacant.error)}</div>`);
+    else if (Array.isArray(nearVacant)) {
+      parts.push(nearVacant.length
+        ? `<div class="vachead">Vacant notices within 300 ft: ${nearVacant.length}</div>` +
+          (() => {
+            const byAddr = new Map();                         // one row per address, keeping its most recent notice date
+            nearVacant.forEach(h => {
+              const a = clean(h.p.Address), cur = byAddr.get(a);
+              if (!cur) byAddr.set(a, { h, last: Number(h.p.DateNotice) || 0 });
+              else if ((Number(h.p.DateNotice) || 0) > cur.last) cur.last = Number(h.p.DateNotice);
+            });
+            return [...byAddr.values()].slice(0, 5).map(({ h, last }) => `<div class="hyd"><div class="num" style="background:#16a34a;color:#fff">V</div><div>
+              <div class="main">${esc(titleAddr(clean(h.p.Address)))} <span class="tag" style="background:#052e16;color:#86efac">VACANT</span>${call.label && sameAddr(clean(h.p.Address), call.label) ? '<span class="tag thisaddr">THIS ADDRESS</span>' : `<span class="tag">${Math.round(h.ft)} ft</span>`}</div>
+              ${fmtDate(last) ? `<div class="sub">Most recent notice: ${esc(fmtDate(last))}</div>` : ''}</div></div>`).join('');
+          })()
+        : '<div class="hint">No open vacant building notices within 300 ft.</div>');
+    }
+    haz = parts.join('');
+  }
+
+  // Alerts for the call address itself (same house number and street)
+  let addrAlert = '';
+  const callKey = call.label;
+  if (callKey) {
+    if (Array.isArray(nearXray)) nearXray.forEach(h => {
+      const where = clean(h.p.szLocation) || [h.p.nHouseNum, h.p.szStreet].filter(Boolean).join(' ');
+      if (!sameAddr(where, callKey)) return;
+      const t = clean(h.p.szType) || 'Hazard', dng = /^DNG$|UNSAFE|DANGER/i.test(t);
+      const notes = clean(h.p.szText);
+      // laid out like the vacant alert: title, then "REPORTED ... ON date", then the CAD note
+      const kind = dng ? 'DANGEROUS CONDITION' : /RAY/i.test(t) ? 'CODE X-RAY' : /^(CODE[-\s]?)?X$/i.test(t) ? 'CODE X' : t.toUpperCase();
+      const d = h.p.ltEntryDate ? new Date(Number(h.p.ltEntryDate)) : null;
+      const when = d && isFinite(d) ? `${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}/${d.getFullYear()}` : null;
+      const short = kind === 'DANGEROUS CONDITION' ? 'DANGEROUS' : kind;
+      addrAlert += `<div class="addralert red">⚠ ${esc(kind)} DWELLING<small class="xwhen">${when ? `REPORTED ${esc(short)} ON ${when}` : `REPORTED ${esc(short)} (date not listed)`}</small>` +
+        `${notes ? `<small>${esc(notes.length > 160 ? notes.slice(0, 160) + '…' : notes)}</small>` : ''}</div>`;
+    });
+    const vacHere = Array.isArray(nearVacant) ? nearVacant.filter(h => sameAddr(clean(h.p.Address), callKey)) : [];
+    if (vacHere.length) {
+      const last = Math.max(...vacHere.map(h => Number(h.p.DateNotice) || 0));          // most recent notice
+      const d = last ? new Date(last) : null;
+      const when = d && isFinite(d) ? `${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}/${d.getFullYear()}` : null;
+      addrAlert += `<div class="addralert vac">⚠ VACANT DWELLING<small class="vacwhen">${when ? 'REPORTED VACANT ON ' + when : 'REPORTED VACANT (date not listed)'}</small></div>`;
+    }
+  }
+
+  const nSteps = rt && rt.legs ? rt.legs[0].steps.length : 0;
+  const stepText = (s, i) => i === 0 && rt.outOfQuarters
+    ? `${rt.outOfQuarters} out of quarters, then ${s.maneuver.instruction.charAt(0).toLowerCase()}${s.maneuver.instruction.slice(1)}`
+    : i === nSteps - 1 && rt.arriveSide
+    ? `Arrive: destination is on the ${rt.arriveSide.side.toUpperCase()}${rt.arriveSide.street ? ` (${rt.arriveSide.compass} side of ${rt.arriveSide.street})` : ''}`
+    : s.maneuver.instruction;
+  // Wind line
+  let windTxt = '<b class="loading" style="font-size:15px">checking…</b>';
+  if (windObs && windObs.error) windTxt = '<b style="font-size:14px;color:#fca5a5">Couldn\'t load wind</b>';
+  else if (windObs) {
+    const w = windObs, when = `${w.name}${w.ageMin != null ? `, ${w.ageMin} min ago` : ''}`;
+    windTxt = w.spd < 1 ? `<b>Calm</b><small class="statsub">${esc(when)}</small>`
+      : `<b>From ${w.dir == null ? 'variable' : comp8(w.dir)} ${w.spd} mph${w.gust ? `, gusts ${w.gust}` : ''}</b>` +
+        `<small class="statsub">${w.dir == null ? '' : `Blowing toward ${comp8(w.dir + 180)} · `}${esc(when)}</small>`;
+  }
+
+  const steps = rt && rt.legs ? rt.legs[0].steps.map((s, i) =>
+    `<div class="step"><div class="num">${i + 1}</div><div class="main">${esc(stepText(s, i).replace(/\bdestination\b/g, 'location').replace(/\bDestination\b/g, 'Location'))}${s.distance > 0 ? ` <span class="tag">${fmtMi(s.distance)}</span>` : ''}</div></div>`).join('') : '';
+  let dirSection = '';
+  if (steps) dirSection = `<h3>Turn-by-turn directions</h3>${steps}`;
+  else if (rt === 'loading') dirSection = '<h3>Turn-by-turn directions</h3><div class="loading">Getting directions…</div>';
+
+  $('sheetBody').innerHTML = `
+    <div class="addrrow"><div class="addr">${esc(label)}</div><span class="lrlock">🔒 Locked</span></div>
+    <div class="lockrow"><div class="lrbox"><span class="lrlbl">Box number</span><b class="lrnum">${boxTxt}</b><small class="lrfd">${house}</small></div><a class="lrsv" href="${streetViewUrl()}" target="_blank" rel="noopener">Street View</a><button id="clearCall">Clear call</button></div>
+    ${addrAlert ? `<div class="addralerts">${addrAlert}</div>` : ''}${hazAlert}
+    <div class="stats">
+      <div class="stat"><span>Building</span><b>${bldgInfoTxt}</b>${bldgInfoSub}</div>
+      <div class="stat"><span>From ${esc(o ? o.name : '…')}</span><b>${routeTxt.replace(' · about ', '<br>about ')}</b></div>
+      <div class="stat wide"><span>Wind</span>${windTxt}</div>
+    </div>
+    <h3>Nearest hydrants</h3>
+    ${hyd}
+    ${dirSection}
+    <h3>Code X-Ray and vacant buildings</h3>
+    <div class="legend"><span><span class="lgdot" style="background:#e11d48">X</span>Code X / X-Ray</span><span><span class="lgdot" style="background:#e11d48">D</span>Dangerous condition</span><span><span class="lgdot" style="background:#16a34a">V</span>Vacant building</span></div>
+    ${haz}
+    <p class="fine">Reference and study tool. Drive times are normal-traffic estimates, and box lines and hydrants come from Baltimore City's public 911-CAD map data. Always go by dispatch and your unit's terminal. Unofficial app, not a Baltimore City Fire Department product. © 2026 Joseph Heinze. All rights reserved.</p>`;
+
+
+  const cc = $('clearCall');
+  if (cc) cc.onclick = () => { $('q').value = ''; $('suggest').style.display = 'none'; clearCall(); };
+  $('sheetBody').querySelectorAll('[data-h]').forEach(el => el.onclick = () => {
+    const h = nearHydrants[+el.dataset.h];
+    map.flyTo({ center: [h.lng, h.lat], zoom: 18 });
+    hydMarkers[+el.dataset.h].togglePopup();
+  });
+}
+</script>
+</body>
+</html>
