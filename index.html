@@ -616,8 +616,8 @@ function start() {
     if (call) { toast('Call address is locked. Tap ✕ or "Clear call" to pick a new spot.'); return; }
     pickBuildingAt([e.lngLat.lng, e.lngLat.lat]);
   });
-  map.on('moveend', debounce(loadAreaHydrants, 400));
-  map.on('moveend', debounce(loadAreaHazards, 450));
+  map.on('moveend', debounce(() => whenSharp(loadAreaHydrants), 400));
+  map.on('moveend', debounce(() => whenSharp(loadAreaHazards), 450));
 
   loadStations();
   loadBoxes();
@@ -731,7 +731,7 @@ function addOverlays() {
     paint: { 'text-color': '#fff' } });
   hazIds('xray').forEach(id => map.on('click', id, e => new mapboxgl.Popup({ offset: 8 }).setLngLat(e.lngLat).setHTML(xrayHTML(e.features[0].properties)).addTo(map)));
   hazIds('vacant').forEach(id => map.on('click', id, e => new mapboxgl.Popup({ offset: 8 }).setLngLat(e.lngLat).setHTML(vacantHTML(e.features[0].properties)).addTo(map)));
-  loadAreaHazards();
+  whenSharp(loadAreaHazards);
 
   map.on('click', 'area-hydrants', e => {
     const p = e.features[0].properties;
@@ -739,7 +739,7 @@ function addOverlays() {
   });
   map.on('mouseenter', 'area-hydrants', () => map.getCanvas().style.cursor = 'pointer');
   map.on('mouseleave', 'area-hydrants', () => map.getCanvas().style.cursor = '');
-  loadAreaHydrants();
+  whenSharp(loadAreaHydrants);
 }
 
 function boxStyle() {
@@ -1063,6 +1063,15 @@ function showHazards() {
   });
   setData('xray', { type: 'FeatureCollection', features: xs });
   setData('vacant', { type: 'FeatureCollection', features: vs });
+}
+// Let the satellite pictures finish sharpening before pulling the X-Ray / vacant / hydrant dots,
+// so the two don't fight over a weak signal. Never waits more than 3.5 seconds.
+function whenSharp(fn) {
+  if (!window.map || !map.once || (map.areTilesLoaded && map.areTilesLoaded())) return fn();
+  let done = false;
+  const go = () => { if (done) return; done = true; fn(); };
+  map.once('idle', go);
+  setTimeout(go, 3500);
 }
 let areaSeq = 0;
 async function loadAreaHazards() {
