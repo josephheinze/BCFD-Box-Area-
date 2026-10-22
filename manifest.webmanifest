@@ -1,6 +1,6 @@
 {
-  "name": "Box Response",
-  "short_name": "Box Response",
+  "name": "BCFD Box Information",
+  "short_name": "BCFD Box Information",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
