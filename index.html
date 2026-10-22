@@ -1113,7 +1113,7 @@ function fillOrigin(refresh) {                     // refresh: list updated late
   const short = n => n.replace(/\b([A-Z]{1,2})-(\d+)/g, '$1$2');
   $('splashPick').textContent = 'Choose your location…';
   $('splashList').innerHTML = stations.map(s =>
-    `<button type="button" class="splashItem" data-v="${esc(s.id)}"><span class="si1">From ${esc(short(s.name))} -</span><span class="si2">${esc(s.address.replace(/\s\d{5}$/, ''))}</span></button>`).join('') +
+    `<button type="button" class="splashItem" data-v="${esc(s.id)}"><span class="si1">From ${esc(short(s.name))}</span><span class="si2">${esc(s.address.replace(/\s\d{5}$/, ''))}</span></button>`).join('') +
     '<button type="button" class="splashItem" data-v="gps"><span class="si1">From my current location (GPS)</span></button>';
   $('splashPick').onclick = () => $('splashList').classList.toggle('open');
   $('splashList').querySelectorAll('.splashItem').forEach(b => b.onclick = () => {
