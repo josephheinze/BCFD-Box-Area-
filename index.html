@@ -1617,8 +1617,9 @@ function rankHydrants() {
       h.toGo = rest;
     }
   });
-  // on the way in: the one closest to the address along your route first; then the rest by shortest lay
-  nearHydrants.sort((a, b) => (b.onWay - a.onWay) || (a.onWay ? a.toGo - b.toGo : a.ft - b.ft));
+  // #1: the closest one to the address in your direction of travel (last one you pass before the stop); #2 on: shortest lay first
+  const way = nearHydrants.filter(h => h.onWay).sort((a, b) => a.toGo - b.toGo)[0];
+  nearHydrants.sort((a, b) => (b === way) - (a === way) || a.ft - b.ft);
   hydMarkers = nearHydrants.map(h => h.m).filter(Boolean);
   nearHydrants.forEach((h, i) => { if (h.m && h.m.getElement) h.m.getElement().textContent = i + 1; });
 }
