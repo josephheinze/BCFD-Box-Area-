@@ -590,7 +590,7 @@ function start() {
   let tokenWarned = false;
   map.on('error', e => {
     const st = e && e.error && e.error.status;
-    if ((st === 401 || st === 403) && !tokenWarned) {
+    if ((st === 401 || st === 403) && !tokenWarned && !(e && e.sourceId === 'md-photo')) {
       tokenWarned = true;
       showBanner('<strong>Mapbox rejected the access token.</strong> Check the token at <a href="https://account.mapbox.com" target="_blank">account.mapbox.com</a> and paste it into MAPBOX_TOKEN at the top of the script.');
     }
@@ -616,8 +616,8 @@ function start() {
     if (call) { toast('Call address is locked. Tap ✕ or "Clear call" to pick a new spot.'); return; }
     pickBuildingAt([e.lngLat.lng, e.lngLat.lat]);
   });
-  map.on('moveend', debounce(() => whenSharp(loadAreaHydrants), 400));
-  map.on('moveend', debounce(() => whenSharp(loadAreaHazards), 450));
+  map.on('moveend', debounce(loadAreaHydrants, 400));
+  map.on('moveend', debounce(loadAreaHazards, 450));
 
   loadStations();
   loadBoxes();
@@ -658,6 +658,15 @@ function addOverlays() {
   if (styleName === 'sat') map.getStyle().layers.forEach(l => {
     if (l.type === 'line' && (l['source-layer'] === 'road' || /^(road|bridge|tunnel)/.test(l.id))) { try { map.setLayoutProperty(l.id, 'visibility', 'none'); } catch (e) {} }
   });
+
+  // Satellite view: Maryland's 6-inch aerial photos (2025 for Baltimore City) laid over Mapbox's photos when zoomed in close.
+  // Mapbox's own photos stay underneath, so if the state's server is slow or down you still see a picture.
+  if (styleName === 'sat') try {
+    map.addSource('md-photo', { type: 'raster', tileSize: 512, minzoom: 14, maxzoom: 19, attribution: 'Aerial photos: MD iMAP, DoIT',
+      tiles: ['https://mdgeodata.md.gov/imagery/rest/services/SixInch/SixInchImagery2023_2024_2025/MapServer/export?bbox={bbox-epsg-3857}&bboxSR=3857&imageSR=3857&size=512,512&format=jpg&transparent=false&f=image'] });
+    const above = map.getStyle().layers.find(l => l.type !== 'raster' && l.type !== 'background');
+    map.addLayer({ id: 'md-photo', type: 'raster', source: 'md-photo', minzoom: 14.5, paint: { 'raster-fade-duration': 150 } }, above && above.id);
+  } catch (e) { console.error(e); }
 
   map.addSource('boxes', { type: 'geojson', data: boxes || empty });
   map.addSource('box-labels', { type: 'geojson', data: boxLabels() });
@@ -731,7 +740,7 @@ function addOverlays() {
     paint: { 'text-color': '#fff' } });
   hazIds('xray').forEach(id => map.on('click', id, e => new mapboxgl.Popup({ offset: 8 }).setLngLat(e.lngLat).setHTML(xrayHTML(e.features[0].properties)).addTo(map)));
   hazIds('vacant').forEach(id => map.on('click', id, e => new mapboxgl.Popup({ offset: 8 }).setLngLat(e.lngLat).setHTML(vacantHTML(e.features[0].properties)).addTo(map)));
-  whenSharp(loadAreaHazards);
+  loadAreaHazards();
 
   map.on('click', 'area-hydrants', e => {
     const p = e.features[0].properties;
@@ -739,7 +748,7 @@ function addOverlays() {
   });
   map.on('mouseenter', 'area-hydrants', () => map.getCanvas().style.cursor = 'pointer');
   map.on('mouseleave', 'area-hydrants', () => map.getCanvas().style.cursor = '');
-  whenSharp(loadAreaHydrants);
+  loadAreaHydrants();
 }
 
 function boxStyle() {
@@ -1063,15 +1072,6 @@ function showHazards() {
   });
   setData('xray', { type: 'FeatureCollection', features: xs });
   setData('vacant', { type: 'FeatureCollection', features: vs });
-}
-// Let the satellite pictures finish sharpening before pulling the X-Ray / vacant / hydrant dots,
-// so the two don't fight over a weak signal. Never waits more than 3.5 seconds.
-function whenSharp(fn) {
-  if (!window.map || !map.once || (map.areTilesLoaded && map.areTilesLoaded())) return fn();
-  let done = false;
-  const go = () => { if (done) return; done = true; fn(); };
-  map.once('idle', go);
-  setTimeout(go, 3500);
 }
 let areaSeq = 0;
 async function loadAreaHazards() {
