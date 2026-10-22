@@ -746,13 +746,13 @@ const ROSTER = [
   { addr: '520 S Conkling St', units: 'E-41', engine: '41' },
   { addr: '1601 Broening Hwy', units: 'E-50 M-2', engine: '50' },
   { addr: '5714 Eastern Ave', units: 'T-20 A-20 A-29', engine: null },
-  { addr: '645 N Highland St', units: 'E-51', engine: '51' },
+  { addr: '645 N Highland St', alt: ['646 N Highland Ave'], units: 'E-51', engine: '51' },
   { addr: '4315 Mannasota Ave', units: 'E-27 T-26', engine: '27' },
   // Second Battalion
   { addr: '1100 Hillen St', units: 'E-6 T-1 M-7 A-24', engine: '6' },
   { addr: '405 McMechen St', units: 'E-13 T-16 M-4', engine: '13' },
   { addr: '3123 Greenmount Ave', units: 'E-31 A-3', engine: '31' },
-  { addr: '805 E 25th St', units: 'T-5 M-16 A-25', engine: null },
+  { addr: '805 E 25th St', alt: ['801 E 25th St'], units: 'T-5 M-16 A-25', engine: null },   // the city's map lists it as 801
   { addr: '1223 N Montford Ave', units: 'E-33', engine: '33' },
   { addr: '800 Light St', units: 'E-2', engine: '2' },
   // Third Battalion
@@ -787,7 +787,7 @@ const ROSTER = [
 ];
 function rosterFor(address, rawEngine, taken) {
   const a = addrParts(address);
-  const byAddr = a.num ? ROSTER.find(r => r.addr && (x => x.num === a.num && x.core === a.core)(addrParts(r.addr))) : null;
+  const byAddr = a.num ? ROSTER.find(r => r.addr && [r.addr].concat(r.alt || []).some(ad => (x => x.num === a.num && x.core === a.core)(addrParts(ad)))) : null;
   return byAddr || ROSTER.find(r => r.engine && r.engine === rawEngine && !(taken && taken.has(r))) || null;
 }
 // Houses on the department's list that the city's map doesn't have yet (e.g. a company that moved): place them by address
@@ -821,15 +821,15 @@ async function loadStations() {
     stations = (d.features || []).filter(f => f.geometry).map(f => {
       const raw = clean(f.attributes.NAME).replace(/\s+/g, ' ');
       const rawEngine = engineNumber(raw);
-      if (!rawEngine) return null;                       // skip non-firehouse sites (fireboat, etc.)
       const r = rosterFor(clean(f.attributes.ADDRESS), rawEngine, matchedRoster);   // the department's current list wins
+      if (!rawEngine && !r) return null;                 // skip non-firehouse sites (fireboat, etc.)
       if (r) matchedRoster.add(r);
       const name = r ? r.units : fixMedics(fixQuarters(rawEngine, raw));
       const engine = r ? r.engine : engineNumber(name);  // null if no engine / squad in the house
       const id = engine ? 'E-' + engine : (name.split(' ')[0] || 'Q-' + rawEngine);
       const sortKey = Number(engine || (name.match(/\d+/) || [999])[0]);
       return { id, name, address: clean(f.attributes.ADDRESS), lng: f.geometry.x, lat: f.geometry.y, engine, sortKey };
-    }).filter(Boolean).sort((a, b) => a.sortKey - b.sortKey);
+    }).filter(Boolean).filter((x, i, all) => all.findIndex(y => y.id === x.id) === i).sort((a, b) => a.sortKey - b.sortKey);
   } catch (e) {
     cityFailed(e);
   }
