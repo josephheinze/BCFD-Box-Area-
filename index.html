@@ -1574,6 +1574,87 @@ function mainRoadBetween(a, b) {
   return null;
 }
 
+// Hose lay: the engine stops on the street in front of the address; the supply line runs from the hydrant
+// down the street(s) to it, following the street around any corner. Distance comes from a street route
+// (walking, so one-way streets don't matter), not a straight line through the buildings.
+const layDone = new Set();
+// Streets only (no alleys, footpaths or parking lots), from the map's own street lines
+const LAY_CLASSES = ['motorway', 'motorway_link', 'trunk', 'trunk_link', 'primary', 'primary_link', 'secondary', 'secondary_link',
+  'tertiary', 'tertiary_link', 'street', 'street_limited'];
+function streetGraph() {
+  let feats = [];
+  try { feats = map.querySourceFeatures('composite', { sourceLayer: 'road' }); } catch (e) { return null; }
+  const nodes = new Map(), segs = [];
+  const key = p => Math.round(p[0] * 1e5) + ',' + Math.round(p[1] * 1e5);       // ~1 m, so pieces split at tile edges join up
+  const node = p => { const k = key(p); if (!nodes.has(k)) nodes.set(k, { p, edges: [] }); return k; };
+  const link = (a, b, ft) => { nodes.get(a).edges.push([b, ft]); nodes.get(b).edges.push([a, ft]); };
+  feats.forEach(f => {
+    const pr = f.properties || {};
+    if (!LAY_CLASSES.includes(pr.class) || pr.structure === 'tunnel') return;
+    const g = f.geometry || {}, lines = g.type === 'LineString' ? [g.coordinates] : g.type === 'MultiLineString' ? g.coordinates : [];
+    lines.forEach(ln => { for (let i = 1; i < ln.length; i++) {
+      const a = node(ln[i - 1]), b = node(ln[i]); if (a === b) continue;
+      const ft = feetBetween(ln[i - 1], ln[i]); link(a, b, ft); segs.push([a, b, ln[i - 1], ln[i], ft]);
+    } });
+  });
+  return segs.length ? { nodes, segs } : null;
+}
+// Feet along the streets from point A to point B (each first stepped onto its nearest street); null if not connected
+function streetFeet(G, A, B) {
+  const snap = (pt, id) => {
+    let best = null, bd = Infinity;
+    G.segs.forEach(s => { const q = nearestOnPolygon(pt, { type: 'Polygon', coordinates: [[s[2], s[3]]] }); const d = q ? feetBetween(pt, q) : Infinity; if (d < bd) { bd = d; best = { s, q }; } });
+    if (!best || bd > 150) return null;
+    G.nodes.set(id, { p: best.q, edges: [] });
+    const [a, b, pa, pb] = best.s;
+    const da = feetBetween(best.q, pa), db = feetBetween(best.q, pb);
+    G.nodes.get(id).edges.push([a, da], [b, db]); G.nodes.get(a).edges.push([id, da]); G.nodes.get(b).edges.push([id, db]);
+    snaps.push({ id, s: best.s, q: best.q });
+    return bd;
+  };
+  const snaps = [];
+  const off = snap(A, '#A');
+  if (off == null || snap(B, '#B') == null) return null;
+  if (snaps[0].s === snaps[1].s) {                               // hydrant and engine on the same stretch of street: straight down it
+    const d = feetBetween(snaps[0].q, snaps[1].q);
+    G.nodes.get('#A').edges.push(['#B', d]); G.nodes.get('#B').edges.push(['#A', d]);
+  }
+  const dist = new Map([['#A', 0]]), done = new Set(), queue = [['#A', 0]];
+  while (queue.length) {
+    queue.sort((x, y) => x[1] - y[1]);
+    const [k, d] = queue.shift();
+    if (done.has(k)) continue;
+    if (k === '#B') return Math.round(d + off);                  // plus the few feet from the hydrant out to the street
+    done.add(k);
+    (G.nodes.get(k).edges || []).forEach(([n, w]) => { const nd = d + w; if (nd < (dist.has(n) ? dist.get(n) : Infinity)) { dist.set(n, nd); queue.push([n, nd]); } });
+    if (d > 6000) break;
+  }
+  return null;
+}
+async function hoseLays(seq) {
+  if (seq !== callSeq || layDone.has(seq) || !Array.isArray(nearHydrants) || !nearHydrants.length || !callAccess || !callAccess.front) return;
+  layDone.add(seq);
+  const E = callAccess.front;                                    // where the engine stops
+  const G0 = window.map && map.querySourceFeatures ? streetGraph() : null;
+  await Promise.all(nearHydrants.map(async h => {
+    // first choice: the map's street lines, so the lay always follows the streets
+    const G = G0 && { nodes: new Map([...G0.nodes].map(([k, v]) => [k, { p: v.p, edges: v.edges.slice() }])), segs: G0.segs };   // own copy per hydrant
+    const ft = G ? streetFeet(G, [h.lng, h.lat], E) : null;
+    if (ft != null) { h.ft = ft; return; }
+    try {                                                        // backup: a walking route along the streets
+      const r = await fetch(`https://api.mapbox.com/directions/v5/mapbox/walking/${h.lng},${h.lat};${E[0]},${E[1]}?overview=false&access_token=${MAPBOX_TOKEN}`);
+      const d = await r.json();
+      const m = d && d.routes && d.routes[0] && d.routes[0].distance;
+      if (m != null && isFinite(m)) h.ft = Math.round(m * 3.281);
+    } catch (e) { /* keep the straight-line feet */ }
+  }));
+  if (seq !== callSeq || !Array.isArray(nearHydrants)) return;
+  nearHydrants.sort((a, b) => a.ft - b.ft);                      // nearest by hose lay
+  hydMarkers = nearHydrants.map(h => h.m).filter(Boolean);
+  nearHydrants.forEach((h, i) => { if (h.m && h.m.getElement) h.m.getElement().textContent = i + 1; });
+  renderSheet();
+}
+
 async function loadNearHydrants(seq) {
   const pt = [call.lng, call.lat];
   near311 = [];
@@ -1592,14 +1673,16 @@ async function loadNearHydrants(seq) {
     nearHydrants.forEach((h, i) => {
       const t = hydrantText(h.p);
       const el = document.createElement('div'); el.className = 'hyd-pin' + (t.bad.length ? ' bad' : t.caution.length ? ' caution' : ''); el.textContent = i + 1;
-      hydMarkers.push(new mapboxgl.Marker({ element: el }).setLngLat([h.lng, h.lat])
-        .setPopup(new mapboxgl.Popup({ offset: 14 }).setHTML(hydrantHTML(h.p))).addTo(map));
+      h.m = new mapboxgl.Marker({ element: el }).setLngLat([h.lng, h.lat])
+        .setPopup(new mapboxgl.Popup({ offset: 14 }).setHTML(hydrantHTML(h.p))).addTo(map);
+      hydMarkers.push(h.m);
     });
   } catch (e) {
     if (seq !== callSeq) return;
     nearHydrants = { error: e.message || String(e) };
   }
   renderSheet(); fitAll();
+  hoseLays(seq);                                                 // feet along the street to the engine (once the front is known)
   // flag hydrants across a main road from the building (checked once the map's road lines are loaded)
   const checkAcross = () => {
     if (seq !== callSeq || !Array.isArray(nearHydrants) || !call) return;
@@ -1734,6 +1817,7 @@ async function loadBuildingAndAccess(seq) {
     if (!pick) callAccess = { none: true, street: front ? front.p.name : null, front: front ? front.c : null };
     else callAccess = { ft: pick.a.ft, dir: compass(bearing(center, pick.a.c)), where: pick.where, name: pick.a.p.name || '',
                         street: front ? front.p.name : null, front: front ? front.c : null, pt: pick.a.c, walks: null };
+    setTimeout(() => hoseLays(seq), 0);                           // hydrant feet run to the engine in front of the building
     // The building's own outline, so B / C / D sit on its real sides (big buildings) or the neighbors (rowhouses)
     try { callAccess.fp = await callFootprint(center); } catch (e) { callAccess.fp = null; }
     callAccess.props = await nearbyProperties(center);
