@@ -203,6 +203,7 @@
   .legend > span { display: inline-flex; align-items: center; gap: 4px; }
   .lgdot { display: inline-grid; place-items: center; width: 15px; height: 15px; border-radius: 50%; color: #fff; font-size: 9px; font-weight: 800; border: 1px solid #fff; flex: none; }
   @media (max-width: 340px) { .legend { gap: 3px; } .lgdot { width: 13px; height: 13px; font-size: 8px; } }
+  .hyd[data-h] .tag.onway { background: rgba(56,189,248,.18); color: #7dd3fc; }
   .hyd[data-h] .tag { font-size: 13px; font-weight: 700; color: #e5e7eb; padding: 2px 7px; margin-top: 3px; }   /* hydrant feet / hose lengths / main size */
   .vachead { font-size: 14px; font-weight: 800; color: #e5e7eb; margin: 12px 0 2px; }
   .hyd { display: flex; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line); cursor: pointer; }
@@ -1449,6 +1450,7 @@ async function runRoute() {
     window._route = rt;
     routeGeo = { type: 'Feature', properties: {}, geometry: rt.geometry };
     setData('route', routeGeo);
+    rankHydrants();                                              // hydrants on the way in move to the top
   } catch (e) {
     if (seq !== callSeq) return;
     window._route = { error: e.message };
@@ -1578,6 +1580,23 @@ function mainRoadBetween(a, b) {
 // down the street(s) to it, following the street around any corner. Distance comes from a street route
 // (walking, so one-way streets don't matter), not a straight line through the buildings.
 const layDone = new Set();
+// Order the hydrants the way a crew would pick them: ones the engine passes on the way in (forward lay) first,
+// then the rest; shortest hose lay first within each group. Re-numbers the map pins to match.
+function rankHydrants() {
+  if (!Array.isArray(nearHydrants) || !nearHydrants.length) return;
+  const rt = window._route, line = rt && rt.geometry && rt.geometry.coordinates;
+  nearHydrants.forEach(h => {
+    h.onWay = false;
+    if (!line || line.length < 2) return;
+    const q = nearestOnPolygon([h.lng, h.lat], { type: 'Polygon', coordinates: [line] });
+    const end = line[line.length - 1];
+    // on the street the engine drives in on, and not past the stop in front of the address
+    h.onWay = !!q && feetBetween([h.lng, h.lat], q) <= 75 && !(feetBetween(q, end) < 3 && feetBetween([h.lng, h.lat], end) > 30);
+  });
+  nearHydrants.sort((a, b) => (b.onWay - a.onWay) || (a.ft - b.ft));
+  hydMarkers = nearHydrants.map(h => h.m).filter(Boolean);
+  nearHydrants.forEach((h, i) => { if (h.m && h.m.getElement) h.m.getElement().textContent = i + 1; });
+}
 // Streets only (no alleys, footpaths or parking lots), from the map's own street lines
 const LAY_CLASSES = ['motorway', 'motorway_link', 'trunk', 'trunk_link', 'primary', 'primary_link', 'secondary', 'secondary_link',
   'tertiary', 'tertiary_link', 'street', 'street_limited'];
@@ -1674,9 +1693,7 @@ async function hoseLays(seq) {
     }
   });
   if (seq !== callSeq || !Array.isArray(nearHydrants)) return;
-  nearHydrants.sort((a, b) => a.ft - b.ft);                      // nearest by hose lay
-  hydMarkers = nearHydrants.map(h => h.m).filter(Boolean);
-  nearHydrants.forEach((h, i) => { if (h.m && h.m.getElement) h.m.getElement().textContent = i + 1; });
+  rankHydrants();                                                // on the way in first, then shortest lay
   renderSheet();
 }
 
@@ -2354,7 +2371,7 @@ function renderSheet() {
       const numCls = t.bad.length ? 'num bad' : t.caution.length ? 'num caution' : 'num';
       const warn = t.bad.map(w => `<div class="hwarn bad">⚠ ${esc(w)}</div>`).join('') + t.caution.map(w => `<div class="hwarn caution">⚠ ${esc(w)}</div>`).join('');
       return `<div class="hyd" data-h="${i}"><div class="${numCls}">${i + 1}</div><div>
-        <div class="main">${esc(t.loc)} <span class="tag">${Math.round(h.ft)} ft · ${lengths} section${lengths > 1 ? 's' : ''}${h.layStraight ? ' (straight line)' : ''}</span>${t.main ? `<span class="tag">${esc(t.main)}</span>` : ''}</div>
+        <div class="main">${esc(t.loc)} <span class="tag">${Math.round(h.ft)} ft · ${lengths} section${lengths > 1 ? 's' : ''}${h.layStraight ? ' (straight line)' : ''}</span>${h.onWay ? '<span class="tag onway">on the way in</span>' : ''}${t.main ? `<span class="tag">${esc(t.main)}</span>` : ''}</div>
         ${warn}${t.extra ? `<div class="sub">${esc(t.extra)}</div>` : ''}</div></div>`;
     }).join('') : '<div class="hint">No hydrants found within about 3,000 ft.</div>';
     if (near311.length) hyd += near311.map(r =>
