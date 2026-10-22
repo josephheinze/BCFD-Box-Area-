@@ -1604,8 +1604,21 @@ function rankHydrants() {
     const ahead = feetBetween(end, H) * Math.cos((bearing(end, H) - last) * Math.PI / 180);
     // on the street the engine drives in on (either side of it), and not past the stop in front of the address
     h.onWay = !!q && feetBetween(H, q) <= 120 && ahead <= 15;
+    // how much of the route is left after passing this hydrant: the last one you pass before the stop is the closest in your direction
+    h.toGo = Infinity;
+    if (h.onWay) {
+      let best = Infinity, idx = 0, qq = null;
+      for (let i = 1; i < line.length; i++) {
+        const p = nearestOnPolygon(H, { type: 'Polygon', coordinates: [[line[i - 1], line[i]]] }), d = p ? feetBetween(H, p) : Infinity;
+        if (d < best) { best = d; idx = i; qq = p; }
+      }
+      let rest = qq ? feetBetween(qq, line[idx]) : 0;
+      for (let i = idx + 1; i < line.length; i++) rest += feetBetween(line[i - 1], line[i]);
+      h.toGo = rest;
+    }
   });
-  nearHydrants.sort((a, b) => (b.onWay - a.onWay) || (a.ft - b.ft));
+  // on the way in: the one closest to the address along your route first; then the rest by shortest lay
+  nearHydrants.sort((a, b) => (b.onWay - a.onWay) || (a.onWay ? a.toGo - b.toGo : a.ft - b.ft));
   hydMarkers = nearHydrants.map(h => h.m).filter(Boolean);
   nearHydrants.forEach((h, i) => { if (h.m && h.m.getElement) h.m.getElement().textContent = i + 1; });
 }
@@ -1644,24 +1657,69 @@ async function cityStreetLines(w, sth, e, n) {
 }
 function streetGraph(lines) {
   const nodes = new Map(), segs = [];
-  const key = p => Math.round(p[0] * 1e5) + ',' + Math.round(p[1] * 1e5);       // ~1 m, so pieces split at tile edges join up
-  const node = p => { const k = key(p); if (!nodes.has(k)) nodes.set(k, { p, edges: [] }); return k; };
+  // Points within about 3 ft are the same corner, even when the numbers differ slightly, so streets connect where they meet
+  const cells = new Map(), cell = (x, y) => x + ',' + y;
+  const node = p => {
+    const cx = Math.round(p[0] * 1e5), cy = Math.round(p[1] * 1e5);
+    for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) {
+      for (const k of cells.get(cell(cx + dx, cy + dy)) || []) if (feetBetween(nodes.get(k).p, p) <= 3) return k;
+    }
+    const k = 'n' + nodes.size;
+    nodes.set(k, { p, edges: [] });
+    const c = cell(cx, cy); if (!cells.has(c)) cells.set(c, []); cells.get(c).push(k);
+    return k;
+  };
   const link = (a, b, ft) => { nodes.get(a).edges.push([b, ft]); nodes.get(b).edges.push([a, ft]); };
-  lines.forEach(ln => { for (let i = 1; i < ln.length; i++) {
-    const a = node(ln[i - 1]), b = node(ln[i]); if (a === b) continue;
-    const ft = feetBetween(ln[i - 1], ln[i]); link(a, b, ft); segs.push([a, b, ln[i - 1], ln[i], ft]);
+  // 1) every straight piece of every street
+  const raw = [], ends = [];
+  lines.forEach(ln => {
+    for (let i = 1; i < ln.length; i++) if (ln[i - 1][0] !== ln[i][0] || ln[i - 1][1] !== ln[i][1]) raw.push({ a: ln[i - 1], b: ln[i], cuts: [] });
+    if (ln.length > 1) ends.push(ln[0], ln[ln.length - 1]);
+  });
+  const k = Math.cos((raw[0] ? raw[0].a[1] : 39.3) * Math.PI / 180);
+  const along = (p, s) => {                                      // where p falls along piece s (0 = start, 1 = end) and how far off it is
+    const dx = (s.b[0] - s.a[0]) * k, dy = s.b[1] - s.a[1], L = dx * dx + dy * dy;
+    const t = L ? (((p[0] - s.a[0]) * k) * dx + (p[1] - s.a[1]) * dy) / L : 0;
+    return t;
+  };
+  const at = (s, t) => [s.a[0] + t * (s.b[0] - s.a[0]), s.a[1] + t * (s.b[1] - s.a[1])];
+  // 2) streets that cross without a shared point (one runs straight through the intersection): cut both where they cross
+  const grid = new Map(), GS = 0.002, seen = new Set();
+  raw.forEach((sg, i) => {
+    const x0 = Math.floor(Math.min(sg.a[0], sg.b[0]) / GS), x1 = Math.floor(Math.max(sg.a[0], sg.b[0]) / GS);
+    const y0 = Math.floor(Math.min(sg.a[1], sg.b[1]) / GS), y1 = Math.floor(Math.max(sg.a[1], sg.b[1]) / GS);
+    for (let x = x0; x <= x1; x++) for (let y = y0; y <= y1; y++) { const c = x + ',' + y; if (!grid.has(c)) grid.set(c, []); grid.get(c).push(i); }
+  });
+  grid.forEach(list => { for (let i = 0; i < list.length; i++) for (let j = i + 1; j < list.length; j++) {
+    const pk = list[i] + ',' + list[j]; if (seen.has(pk)) continue; seen.add(pk);
+    const A = raw[list[i]], B = raw[list[j]];
+    if (!segCross(A.a, A.b, B.a, B.b)) continue;
+    const den = (A.a[0] - A.b[0]) * (B.a[1] - B.b[1]) - (A.a[1] - A.b[1]) * (B.a[0] - B.b[0]);
+    if (!den) continue;
+    const t = ((A.a[0] - B.a[0]) * (B.a[1] - B.b[1]) - (A.a[1] - B.a[1]) * (B.a[0] - B.b[0])) / den;
+    const X = at(A, t);
+    A.cuts.push(t); B.cuts.push(along(X, B));
   } });
-  // join street ends that stop right at another street but don't share a point with it (T-intersections)
-  nodes.forEach((n, k) => {
-    if (n.edges.length !== 1) return;
-    let best = null, bd = 8;                                     // within 8 ft
-    segs.forEach(sg => {
-      if (sg[0] === k || sg[1] === k) return;
-      const q = nearestOnPolygon(n.p, { type: 'Polygon', coordinates: [[sg[2], sg[3]]] });
-      const d = q ? feetBetween(n.p, q) : Infinity;
-      if (d < bd) { bd = d; best = sg; }
+  // 3) street ends that stop right at another street without sharing a point (T-intersections): cut that street there
+  ends.forEach(e => {
+    let best = null, bd = 8, bt = 0;
+    const cx = Math.floor(e[0] / GS), cy = Math.floor(e[1] / GS), near = new Set();
+    for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) (grid.get((cx + dx) + ',' + (cy + dy)) || []).forEach(i => near.add(i));
+    near.forEach(i => { const sg = raw[i];
+      const t = along(e, sg); if (t <= 0.001 || t >= 0.999) return;
+      const d = feetBetween(e, at(sg, t)); if (d < bd) { bd = d; best = sg; bt = t; }
     });
-    if (best) { link(k, best[0], feetBetween(n.p, best[2])); link(k, best[1], feetBetween(n.p, best[3])); }
+    if (best) { best.cuts.push(bt); best.tee = (best.tee || []).concat([[e, at(best, bt)]]); }
+  });
+  // 4) build the network from the cut pieces
+  raw.forEach(sg => {
+    const ts = [0].concat(sg.cuts.filter(t => t > 0 && t < 1).sort((x, y) => x - y), [1]);
+    for (let i = 1; i < ts.length; i++) {
+      const p = at(sg, ts[i - 1]), q = at(sg, ts[i]), a = node(p), b = node(q);
+      if (a === b) continue;
+      const ft = feetBetween(p, q); link(a, b, ft); segs.push([a, b, p, q, ft]);
+    }
+    (sg.tee || []).forEach(([e, q]) => { const a = node(e), b = node(q); if (a !== b) link(a, b, feetBetween(e, q)); });
   });
   return segs.length ? { nodes, segs } : null;
 }
@@ -1708,12 +1766,14 @@ async function hoseLays(seq) {
   try { lines = await cityStreetLines(Math.min(...xs) - m, Math.min(...ys) - m * 0.77, Math.max(...xs) + m, Math.max(...ys) + m * 0.77); } catch (e) { lines = []; }
   if (seq !== callSeq) return;
   const sources = [lines, window.map && map.querySourceFeatures ? mapStreetLines() : []].filter(l => l.length);
+  const nets = sources.map(src => streetGraph(src));
   nearHydrants.forEach(h => {
     h.layStraight = true;
-    for (const src of sources) {                                 // the city's street file first, then the map's
-      const G = streetGraph(src);
+    for (const G0 of nets) {                                     // the city's street file first, then the map's
+      const G = G0 && { nodes: new Map([...G0.nodes].map(([k, v]) => [k, { p: v.p, edges: v.edges.slice() }])), segs: G0.segs };
       const ft = G ? streetFeet(G, [h.lng, h.lat], E) : null;
-      if (ft != null) { h.ft = ft; h.layStraight = false; return; }
+      const straight = feetBetween([h.lng, h.lat], E);
+      if (ft != null && ft <= Math.max(straight * 3, straight + 1200)) { h.ft = ft; h.layStraight = false; return; }
     }
   });
   if (seq !== callSeq || !Array.isArray(nearHydrants)) return;
