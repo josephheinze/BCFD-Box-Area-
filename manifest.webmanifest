@@ -1,6 +1,6 @@
 {
-  "name": "BCFD Box Information",
-  "short_name": "BCFD Box Information",
+  "name": "BCFD Box Info",
+  "short_name": "BCFD Box Info",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
