@@ -738,15 +738,94 @@ function refreshBoxFilters() {
 // ============================================================
 // LOAD CITY LAYERS
 // ============================================================
+// Units in each firehouse, from the department's station list (baltimorecity.gov/fire/our-work/fire-stations).
+// Matched to the city's map points by street address, then by engine / squad number. A house the list doesn't cover keeps the map's name.
+const ROSTER = [
+  // First Battalion
+  { addr: '2120 Eastern Ave', units: 'E-5 T-3 M-10', engine: '5' },
+  { addr: '520 S Conkling St', units: 'E-41', engine: '41' },
+  { addr: '1601 Broening Hwy', units: 'E-50 M-2', engine: '50' },
+  { addr: '5714 Eastern Ave', units: 'T-20 A-20 A-29', engine: null },
+  { addr: '645 N Highland St', units: 'E-51', engine: '51' },
+  { addr: '4315 Mannasota Ave', units: 'E-27 T-26', engine: '27' },
+  // Second Battalion
+  { addr: '1100 Hillen St', units: 'E-6 T-1 M-7 A-24', engine: '6' },
+  { addr: '405 McMechen St', units: 'E-13 T-16 M-4', engine: '13' },
+  { addr: '3123 Greenmount Ave', units: 'E-31 A-3', engine: '31' },
+  { addr: '805 E 25th St', units: 'T-5 M-16 A-25', engine: null },
+  { addr: '1223 N Montford Ave', units: 'E-33', engine: '33' },
+  { addr: '800 Light St', units: 'E-2', engine: '2' },
+  // Third Battalion
+  { addr: '1503 W Lafayette Ave', units: 'E-8 T-10 M-15 A-27', engine: '8' },
+  { addr: '1908 Hollins St', units: 'E-14 M-21', engine: '14' },
+  { addr: '3220 Frederick Ave', units: 'E-30 T-8 M-12', engine: '30' },
+  { addr: '2249 Edmondson Ave', units: 'E-36', engine: '36' },
+  { addr: '2608 Washington Blvd', units: 'E-47', engine: '47' },
+  { addr: '1229 Bush St', units: 'E-55 T-23 A-22', engine: '55' },
+  { addr: '608 Swann Ave', units: 'E-53', engine: '53' },
+  // Fourth Battalion
+  { addr: '3724 Roland Ave', units: 'E-21 T-25', engine: '21' },
+  { addr: '4522 Harford Rd', units: 'E-42 M-6 A-30', engine: '42' },
+  { addr: '1100 Walters Ave', units: 'E-43 M-18', engine: '43' },
+  { addr: '2 Upland Rd', units: 'E-44 A-19', engine: '44' },
+  { addr: '5821 Belair Rd', units: 'SQ-54 T-30 M-13', engine: '54' },
+  { addr: '6512 Harford Rd', units: 'E-56', engine: '56' },
+  { addr: '1201 E Cold Spring Ln', units: 'E-4 T-29', engine: '4' },
+  // Fifth Battalion
+  { addr: '3130 W North Ave', units: 'E-20 T-18 A-8', engine: '20' },
+  { addr: '4312 Park Heights Ave', units: 'E-29 M-17', engine: '29' },
+  { addr: '3906 Liberty Heights Ave', units: 'SQ-40 T-12 M-11', engine: '40' },
+  { addr: '2700 Glen Ave', units: 'E-45 M-14', engine: '45' },
+  { addr: '5500 Reisterstown Rd', units: 'E-46 T-27 A-28', engine: '46' },
+  { addr: '3525 Woodbrook Ave', units: 'E-52', engine: '52' },
+  // Sixth Battalion
+  { addr: '15 S Eutaw St', units: 'E-23 R-1 M-1 A-23', engine: '23' },
+  { addr: '1001 E Fort Ave', units: 'SQ-26 T-6 M-5', engine: '26' },
+  { addr: '430 Maude Ave', units: 'E-35 T-21 M-9', engine: '35' },
+  { addr: '4427 Pennington Ave', units: 'E-57', engine: '57' },
+  { addr: '2425 Annapolis Rd', units: 'E-58', engine: '58' }
+];
+function rosterFor(address, rawEngine, taken) {
+  const a = addrParts(address);
+  const byAddr = a.num ? ROSTER.find(r => r.addr && (x => x.num === a.num && x.core === a.core)(addrParts(r.addr))) : null;
+  return byAddr || ROSTER.find(r => r.engine && r.engine === rawEngine && !(taken && taken.has(r))) || null;
+}
+// Houses on the department's list that the city's map doesn't have yet (e.g. a company that moved): place them by address
+async function addMissingHouses(matched) {
+  const missing = ROSTER.filter(r => r.addr && !matched.has(r));
+  for (const r of missing) {
+    try {
+      let pos = (store('stgeo:' + r.addr) || '').split(',').map(Number);
+      if (pos.length !== 2 || !pos.every(isFinite)) {
+        const res = (await geocode(r.addr + ', Baltimore, MD'))[0];
+        if (!res) continue;
+        pos = [res.lng, res.lat]; store('stgeo:' + r.addr, pos.join(','));
+      }
+      const id = r.engine ? 'E-' + r.engine : r.units.split(' ')[0];
+      if (stations.some(x => x.id === id)) continue;
+      stations.push({ id, name: r.units, address: r.addr, lng: pos[0], lat: pos[1], engine: r.engine,
+                      sortKey: Number(r.engine || (r.units.match(/\d+/) || [999])[0]) });
+    } catch (e) { /* skip this one */ }
+  }
+  stations.sort((a, b) => a.sortKey - b.sortKey);
+  fillOrigin(true);
+  setData('stations', stationsGeo());
+}
+
 async function loadStations() {
+  const matchedRoster = new Set();
   try {
     const d = await cityQuery(LAYER.stations, { where: '1=1', outFields: 'NAME,ADDRESS', returnGeometry: 'true' });
+    // address matches first, so a company that moved isn't pinned to its old house by number
+    (d.features || []).forEach(f => { const r = rosterFor(clean((f.attributes || {}).ADDRESS), null); if (r) matchedRoster.add(r); });
     stations = (d.features || []).filter(f => f.geometry).map(f => {
       const raw = clean(f.attributes.NAME).replace(/\s+/g, ' ');
       const rawEngine = engineNumber(raw);
       if (!rawEngine) return null;                       // skip non-firehouse sites (fireboat, etc.)
-      const name = fixMedics(fixQuarters(rawEngine, raw));
-      const engine = engineNumber(name);                 // null if the engine moved out
+      const r = rosterFor(clean(f.attributes.ADDRESS), rawEngine, matchedRoster);   // the department's current list wins
+      if (r) matchedRoster.add(r);
+      const name = r ? r.units : fixMedics(fixQuarters(rawEngine, raw));
+      const engine = r ? r.engine : engineNumber(name);  // null if no engine / squad in the house
       const id = engine ? 'E-' + engine : (name.split(' ')[0] || 'Q-' + rawEngine);
       const sortKey = Number(engine || (name.match(/\d+/) || [999])[0]);
       return { id, name, address: clean(f.attributes.ADDRESS), lng: f.geometry.x, lat: f.geometry.y, engine, sortKey };
@@ -757,6 +836,7 @@ async function loadStations() {
   if (!stations.length) stations = [Object.assign({ engine: '20' }, DEFAULT_HOUSE)];
   fillOrigin();
   setData('stations', stationsGeo());
+  if (matchedRoster.size) addMissingHouses(matchedRoster);
 }
 
 async function loadBoxes() {
@@ -1008,16 +1088,17 @@ function setupOrigin() {
     if (s) store('originPos', s.lng + ',' + s.lat);
   };
 }
-function fillOrigin() {
-  const saved = store('origin') || DEFAULT_HOUSE.id;
+function fillOrigin(refresh) {                     // refresh: list updated later; don't move the map or reset choices
+  const saved = refresh ? $('origin').value : (store('origin') || DEFAULT_HOUSE.id);
+  const splashWas = refresh ? $('splashPick').value : '';
   $('origin').innerHTML = stations.map(s =>
     `<option value="${esc(s.id)}">From ${esc(s.name)} — ${esc(s.address.replace(/\s\d{5}$/, ''))}</option>`).join('') +
     '<option value="gps">From my current location (GPS)</option>';
   $('origin').value = [...$('origin').options].some(o => o.value === saved) ? saved : (stations[0] || {}).id;
   refreshBoxFilters();
-  if ($('origin').value === 'gps') getGps();
+  if ($('origin').value === 'gps' && !refresh) getGps();
   $('splashPick').innerHTML = '<option value="" selected disabled>Choose your location…</option>' + $('origin').innerHTML;
-  $('splashPick').value = '';
+  $('splashPick').value = splashWas;
   $('splashPick').onchange = () => {
     if (!$('splashPick').value) return;
     $('origin').value = $('splashPick').value;
@@ -1026,7 +1107,7 @@ function fillOrigin() {
   };
   // open the map over the firehouse chosen in the "From" bar (it's remembered between visits)
   const s = stations.find(x => x.id === $('origin').value);
-  if (s && !call && window.map) { map.jumpTo({ center: [s.lng, s.lat - 0.00012], zoom: 17.15 }); store('originPos', s.lng + ',' + s.lat); }
+  if (s && !call && !refresh && window.map) { map.jumpTo({ center: [s.lng, s.lat - 0.00012], zoom: 17.15 }); store('originPos', s.lng + ',' + s.lat); }
 }
 function currentOrigin() {
   const v = $('origin').value;
