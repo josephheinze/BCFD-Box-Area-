@@ -530,7 +530,40 @@ if (typeof mapboxgl === 'undefined') {
 // Start over the firehouse last chosen in the "From" bar (E-20 until one is picked)
 function startCenter() {
   const v = (store('originPos') || '').split(',').map(Number);
-  return v.length === 2 && v.every(isFinite) ? [v[0], v[1] - 0.00012] : [DEFAULT_HOUSE.lng, DEFAULT_HOUSE.lat - 0.00012];
+  return houseCenter(v.length === 2 && v.every(isFinite) ? v : [DEFAULT_HOUSE.lng, DEFAULT_HOUSE.lat], startBearing());
+}
+// Which way the map is turned at the firehouse: looking out the front of the house (its own street at the top)
+function startBearing() { const b = +store('originFacing'); return isFinite(b) ? b : 0; }
+// Put the house a little above the middle of the screen, whichever way the map is turned
+function houseCenter(p, brg) {
+  const t = (brg + 180) * Math.PI / 180;
+  return [p[0] + 0.00012 * Math.sin(t) / Math.cos(p[1] * Math.PI / 180), p[1] + 0.00012 * Math.cos(t)];
+}
+// Direction from the house out to the street on its address (e.g. 1001 E Fort Ave -> toward Fort Ave). Remembered per house.
+async function houseFacing(s) {
+  const key = 'facing:' + s.id + ':' + s.lng.toFixed(5) + ',' + s.lat.toFixed(5), had = +store(key);
+  if (store(key) != null && isFinite(had)) return had;
+  const front = await frontStreet({ lng: s.lng, lat: s.lat, label: s.address });
+  if (!front || feetBetween([s.lng, s.lat], front.c) < 8) return null;
+  const b = Math.round(bearing([s.lng, s.lat], front.c));
+  store(key, b);
+  return b;
+}
+// Show the firehouse close up, turned so you're looking out of quarters
+let faceSeq = 0;
+function viewHouse(s, jump) {
+  if (!s || !window.map) return;
+  const my = ++faceSeq, key = 'facing:' + s.id + ':' + s.lng.toFixed(5) + ',' + s.lat.toFixed(5), known = +store(key);
+  const b0 = store(key) != null && isFinite(known) ? known : 0;
+  const opts = { center: houseCenter([s.lng, s.lat], b0), zoom: 17.15, bearing: b0, pitch: 0 };
+  jump ? map.jumpTo(opts) : map.flyTo(opts);
+  store('originFacing', b0);
+  if (store(key) != null && isFinite(known)) return;
+  houseFacing(s).then(b => {
+    if (b == null || my !== faceSeq || call) return;
+    store('originFacing', b);
+    map.easeTo({ center: houseCenter([s.lng, s.lat], b), bearing: b, zoom: 17.15, duration: 900 });
+  }).catch(e => console.error(e));
 }
 function start() {
   mapboxgl.accessToken = MAPBOX_TOKEN;
@@ -578,7 +611,7 @@ function start() {
   try {
     window.map = new mapboxgl.Map({
       container: 'map', style: STYLES[styleName],
-      center: startCenter(), zoom: 17.15, attributionControl: true   // close-up on the firehouse
+      center: startCenter(), zoom: 17.15, bearing: startBearing(), attributionControl: true   // close-up on the firehouse, looking out the front
     });
   } catch (e) {
     showBanner("<strong>The map couldn't start on this device.</strong> " + esc(e.message));
@@ -1145,8 +1178,8 @@ function setupOrigin() {
     else if (call) runRoute();
     // move the map over the firehouse just picked (same close-up as the opening view)
     const s = stations.find(x => x.id === $('origin').value);
-    if (s && window.map) map.flyTo({ center: [s.lng, s.lat - 0.00012], zoom: 17.15 });
     if (s) store('originPos', s.lng + ',' + s.lat);
+    if (s && window.map) viewHouse(s);
   };
 }
 function fillOrigin(refresh) {                     // refresh: list updated later; don't move the map or reset choices
@@ -1183,7 +1216,7 @@ function fillOrigin(refresh) {                     // refresh: list updated late
   });
   // open the map over the firehouse chosen in the "From" bar (it's remembered between visits)
   const s = stations.find(x => x.id === $('origin').value);
-  if (s && !call && !refresh && window.map) { map.jumpTo({ center: [s.lng, s.lat - 0.00012], zoom: 17.15 }); store('originPos', s.lng + ',' + s.lat); }
+  if (s && !call && !refresh && window.map) { store('originPos', s.lng + ',' + s.lat); viewHouse(s, true); }
 }
 // Show the chosen house on the "From" button (units on top, address under) and tick it in the list
 function markOrigin() {
@@ -1410,7 +1443,7 @@ function clearCall() {
   refreshBoxFilters();
   $('sheetBody').innerHTML = '<div class="hint">Search a call address, or tap the building on the map.</div>';
   // back over the firehouse chosen in the "From" bar (same close-up as the opening view, north up)
-  if (window.map) map.flyTo({ center: startCenter(), zoom: 17.15, bearing: 0, pitch: 0 });
+  if (window.map) { const s = stations.find(x => x.id === $('origin').value); if (s) viewHouse(s); else map.flyTo({ center: startCenter(), zoom: 17.15, bearing: startBearing(), pitch: 0 }); }
 }
 
 async function runRoute() {
