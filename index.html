@@ -1588,10 +1588,12 @@ function rankHydrants() {
   nearHydrants.forEach(h => {
     h.onWay = false;
     if (!line || line.length < 2) return;
-    const q = nearestOnPolygon([h.lng, h.lat], { type: 'Polygon', coordinates: [line] });
-    const end = line[line.length - 1];
-    // on the street the engine drives in on, and not past the stop in front of the address
-    h.onWay = !!q && feetBetween([h.lng, h.lat], q) <= 75 && !(feetBetween(q, end) < 3 && feetBetween([h.lng, h.lat], end) > 30);
+    const H = [h.lng, h.lat], q = nearestOnPolygon(H, { type: 'Polygon', coordinates: [line] });
+    const end = line[line.length - 1], last = bearing(line[line.length - 2], end);
+    // how far beyond the stop the hydrant is, measured in the direction the engine is driving (+ = past the address)
+    const ahead = feetBetween(end, H) * Math.cos((bearing(end, H) - last) * Math.PI / 180);
+    // on the street the engine drives in on (either side of it), and not past the stop in front of the address
+    h.onWay = !!q && feetBetween(H, q) <= 120 && ahead <= 15;
   });
   nearHydrants.sort((a, b) => (b.onWay - a.onWay) || (a.ft - b.ft));
   hydMarkers = nearHydrants.map(h => h.m).filter(Boolean);
@@ -1639,6 +1641,18 @@ function streetGraph(lines) {
     const a = node(ln[i - 1]), b = node(ln[i]); if (a === b) continue;
     const ft = feetBetween(ln[i - 1], ln[i]); link(a, b, ft); segs.push([a, b, ln[i - 1], ln[i], ft]);
   } });
+  // join street ends that stop right at another street but don't share a point with it (T-intersections)
+  nodes.forEach((n, k) => {
+    if (n.edges.length !== 1) return;
+    let best = null, bd = 8;                                     // within 8 ft
+    segs.forEach(sg => {
+      if (sg[0] === k || sg[1] === k) return;
+      const q = nearestOnPolygon(n.p, { type: 'Polygon', coordinates: [[sg[2], sg[3]]] });
+      const d = q ? feetBetween(n.p, q) : Infinity;
+      if (d < bd) { bd = d; best = sg; }
+    });
+    if (best) { link(k, best[0], feetBetween(n.p, best[2])); link(k, best[1], feetBetween(n.p, best[3])); }
+  });
   return segs.length ? { nodes, segs } : null;
 }
 // Feet along the streets from point A to point B (each first stepped onto its nearest street); null if not connected
