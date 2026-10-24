@@ -1288,12 +1288,12 @@ function getGps() {
 // ADDRESS SEARCH (Mapbox geocoding, limited to Baltimore City)
 // ============================================================
 let lastResults = [];
-function fmtResult(main, rest, lng, lat) { return { main, rest, lng, lat }; }
+function fmtResult(main, rest, lng, lat, rel) { return { main, rest, lng, lat, rel: rel == null ? 1 : rel }; }
 
 // Try Mapbox's v5 geocoder, then its newer v6 one. Returns [{main, rest, lng, lat}] or throws with a reason.
 async function geocode(text) {
   const o = currentOrigin() || DEFAULT_HOUSE;
-  const common = `access_token=${MAPBOX_TOKEN}&limit=6&country=us&bbox=${CITY_BBOX.join(',')}&proximity=${o.lng},${o.lat}`;
+  const common = `access_token=${MAPBOX_TOKEN}&limit=10&country=us&bbox=${CITY_BBOX.join(',')}&proximity=${o.lng},${o.lat}`;
   let reason = '';
   try {
     const r = await fetch(`https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(text)}.json?${common}&autocomplete=true&types=address,poi,postcode`);
@@ -1302,7 +1302,7 @@ async function geocode(text) {
     if (r.ok && Array.isArray(d.features)) {
       return d.features.map(f => {
         const main = f.address ? `${f.address} ${f.text}` : f.text;
-        return fmtResult(main, f.place_name.replace(main + ', ', ''), f.center[0], f.center[1]);
+        return fmtResult(main, f.place_name.replace(main + ', ', ''), f.center[0], f.center[1], f.relevance);
       });
     }
     reason = d.message || ('HTTP ' + r.status);
@@ -1332,10 +1332,10 @@ function setupSearch() {
     try {
       const results = await geocode(text);
       if (mine !== seq) return;
-      lastResults = results;
+      lastResults = inMyBoxesFirst(results);
       if (!results.length) { say('No matches in Baltimore City. Try adding the street type, like "Ave" or "St".'); return; }
       if (autoPick) { pick(0); return; }
-      box.innerHTML = results.map((f, i) => `<div data-i="${i}">${esc(f.main)}<small>${esc(f.rest)}</small></div>`).join('');
+      box.innerHTML = lastResults.map((f, i) => `<div data-i="${i}">${esc(f.main)}<small>${esc(f.rest)}</small></div>`).join('');
       box.style.display = 'block';
     } catch (e) {
       if (mine !== seq) return;
@@ -1376,6 +1376,16 @@ function setupSearch() {
   }
 }
 
+// Suggestions inside the chosen firehouse's own boxes go to the top (the closest match always stays near the top:
+// a weaker match in your boxes never jumps ahead of a much better one elsewhere). Shows the best 6.
+function inMyBoxesFirst(results) {
+  const eng = myEngine();
+  const mine = eng && boxes ? boxes.features.filter(f => f.properties.engine === eng) : [];
+  const inMine = r => mine.some(f => pointInGeo([r.lng, r.lat], f.geometry));
+  const top = Math.max(0, ...results.map(r => r.rel));
+  return results.map((r, i) => ({ r, i, good: r.rel >= top - 0.1, mine: mine.length ? inMine(r) : false }))
+    .sort((a, b) => (b.good - a.good) || (b.mine - a.mine) || (a.i - b.i)).map(x => x.r).slice(0, 6);
+}
 async function reverseLabel(pt) {
   try {
     const r = await fetch(`https://api.mapbox.com/geocoding/v5/mapbox.places/${pt.lng},${pt.lat}.json?access_token=${MAPBOX_TOKEN}&types=address&limit=1`);
