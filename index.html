@@ -22,6 +22,10 @@
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="icon" type="image/png" href="icon-512.png">
 <link rel="manifest" href="manifest.webmanifest">
+<link rel="preconnect" href="https://api.mapbox.com" crossorigin>
+<link rel="preconnect" href="https://egisdata.baltimorecity.gov" crossorigin>
+<link rel="preconnect" href="https://baltegis.baltimorecity.gov" crossorigin>
+<link rel="preconnect" href="https://mdgeodata.md.gov" crossorigin>
 <link href="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.css" rel="stylesheet">
 <script src="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.js"></script>
 <style>
@@ -482,9 +486,12 @@ async function cityQuery(layer, params, base) {
   const url = `${base || CITY}/${layer}/query?${qs}`;
   let data;
   try {
-    const r = await fetch(url);
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    data = await r.json();
+    const ctl = window.AbortController ? new AbortController() : null, t = ctl && setTimeout(() => ctl.abort(), 15000);
+    try {
+      const r = await fetch(url, ctl ? { signal: ctl.signal } : undefined);
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      data = await r.json();
+    } finally { if (t) clearTimeout(t); }
   } catch (e) {
     data = await jsonp(url);
   }
@@ -788,16 +795,18 @@ function addOverlays() {
   hazLayer({ id: 'xray-x', type: 'symbol', source: 'xray', minzoom: 15,
     layout: { 'text-field': ['case', ['any', ['==', ['upcase', ['to-string', ['get', 'szType']]], 'DNG'], ['in', 'UNSAFE', ['upcase', ['to-string', ['get', 'szType']]]], ['in', 'DANGER', ['upcase', ['to-string', ['get', 'szType']]]]], 'D', 'X'], 'text-size': ['interpolate', ['linear'], ['zoom'], 15, 7, 18, 9], 'text-font': ['DIN Pro Bold', 'Arial Unicode MS Bold'], 'text-allow-overlap': true, 'text-ignore-placement': true },
     paint: { 'text-color': '#fff' } });
-  hazIds('xray').forEach(id => map.on('click', id, e => new mapboxgl.Popup({ offset: 8 }).setLngLat(e.lngLat).setHTML(xrayHTML(e.features[0].properties)).addTo(map)));
-  hazIds('vacant').forEach(id => map.on('click', id, e => new mapboxgl.Popup({ offset: 8 }).setLngLat(e.lngLat).setHTML(vacantHTML(e.features[0].properties)).addTo(map)));
+  if (!addOverlays.tapsOn) {                                    // once only: these stay hooked up when the map style switches
+    addOverlays.tapsOn = true;
+    hazIds('xray').forEach(id => map.on('click', id, e => new mapboxgl.Popup({ offset: 8 }).setLngLat(e.lngLat).setHTML(xrayHTML(e.features[0].properties)).addTo(map)));
+    hazIds('vacant').forEach(id => map.on('click', id, e => new mapboxgl.Popup({ offset: 8 }).setLngLat(e.lngLat).setHTML(vacantHTML(e.features[0].properties)).addTo(map)));
+    map.on('click', 'area-hydrants', e => {
+      const p = e.features[0].properties;
+      new mapboxgl.Popup({ offset: 8 }).setLngLat(e.lngLat).setHTML(hydrantHTML(p)).addTo(map);
+    });
+    map.on('mouseenter', 'area-hydrants', () => map.getCanvas().style.cursor = 'pointer');
+    map.on('mouseleave', 'area-hydrants', () => map.getCanvas().style.cursor = '');
+  }
   loadAreaHazards();
-
-  map.on('click', 'area-hydrants', e => {
-    const p = e.features[0].properties;
-    new mapboxgl.Popup({ offset: 8 }).setLngLat(e.lngLat).setHTML(hydrantHTML(p)).addTo(map);
-  });
-  map.on('mouseenter', 'area-hydrants', () => map.getCanvas().style.cursor = 'pointer');
-  map.on('mouseleave', 'area-hydrants', () => map.getCanvas().style.cursor = '');
   loadAreaHydrants();
 }
 
@@ -1063,17 +1072,29 @@ let areaXrayRaw = { type: 'FeatureCollection', features: [] }, hazBldgs = [];
 const hazAddr = p => clean(p.szLocation) || [p.nHouseNum, p.szStreet].filter(Boolean).join(' ') || clean(p.Address);
 const hazKind = p => p.szType == null ? 'V' : /^DNG$|UNSAFE|DANGER/i.test(String(p.szType)) ? 'D' : 'X';
 // The spot on a building where its dots sit: the front wall facing its own address street, in line with the record
-function hazFront(q, addr) {
+// The map's street lines grouped by street name (read once per redraw of the dots, not once per building)
+function roadsByName() {
+  const by = new Map();
+  if (!window.map || !map.querySourceFeatures) return by;
+  let roads = [];
+  try { roads = map.querySourceFeatures('composite', { sourceLayer: 'road' }); } catch (e) { /* no road lines yet */ }
+  roads.forEach(f => {
+    const core = f.properties && f.properties.name ? streetCore(f.properties.name) : '';
+    if (!core) return;
+    const g = f.geometry || {}, lines = g.type === 'LineString' ? [g.coordinates] : g.type === 'MultiLineString' ? g.coordinates : [];
+    if (!by.has(core)) by.set(core, []);
+    lines.forEach(ln => by.get(core).push(ln));
+  });
+  return by;
+}
+function hazFront(q, addr, roads) {
   const core = addrParts(addr).core;
   let s = null, sd = Infinity;
   hazFront.along = null;                                         // direction along the front wall, when known
   if (core && window.map && map.querySourceFeatures) {
-    let roads = [];
-    try { roads = map.querySourceFeatures('composite', { sourceLayer: 'road' }); } catch (e) { /* no road lines yet */ }
-    roads.forEach(f => {
-      if (!f.properties || streetCore(f.properties.name) !== core) return;
-      const g = f.geometry || {}, lines = g.type === 'LineString' ? [g.coordinates] : g.type === 'MultiLineString' ? g.coordinates : [];
-      lines.forEach(ln => { const p = nearestOnPolygon(q, { type: 'Polygon', coordinates: [ln] }); const d = p ? feetBetween(q, p) : Infinity; if (d < sd) { sd = d; s = p; } });
+    (((roads || roadsByName()).get(core)) || []).forEach(ln => {
+      const p = nearestOnPolygon(q, { type: 'Polygon', coordinates: [ln] }), d = p ? feetBetween(q, p) : Infinity;
+      if (d < sd) { sd = d; s = p; }
     });
     if (sd > 250) s = null;
   }
@@ -1105,10 +1126,10 @@ function showHazards() {
   areaXrayRaw.features.forEach(f => add(f, hazKind(f.properties || {})));
   areaVacant.features.forEach(f => add(f, 'V'));
   const sides = call && callAccess && callAccess.sides;
-  const xs = [], vs = [], bases = [];
+  const xs = [], vs = [], bases = [], roads = groups.size ? roadsByName() : null;
   groups.forEach(g => {
     const atCall = !!(sides && sides.A && call.label && sameAddr(g.addr, call.label));
-    let base = atCall ? sides.A : hazFront(g.q, g.addr);
+    let base = atCall ? sides.A : hazFront(g.q, g.addr, roads);
     if (!atCall) {                                               // next-door stacks: step sideways along the wall so they don't overlap
       const along = hazFront.along != null ? hazFront.along : 90;
       for (const ft of [12, -12, 24, -24]) { if (!bases.some(c => feetBetween(c, base) < 11)) break; base = offsetFeet(base, along, ft); }
@@ -1470,6 +1491,7 @@ async function runRoute() {
   try {
     // Aim at the front of the building (the address's own street), not whatever road is nearest the pin
     let dest = [call.lng, call.lat], destDir = null, destStreet = null;
+    if (o.address) { o.frontInfo = o.frontInfo || { lng: o.lng, lat: o.lat, label: o.address }; roadsAround(o.frontInfo).catch(() => {}); }   // firehouse street lookup starts now, alongside the call's
     try {
       const front = await frontStreet(call);
       if (front && (front.ft <= 250 || streetCore(front.p.name) === streetCore(call.label))) { dest = front.c; destDir = (bearing(front.c, [call.lng, call.lat]) + 90) % 360; destStreet = front.p.name; }
@@ -1825,11 +1847,13 @@ async function hoseLays(seq) {
   let lines = [];
   try { lines = await cityStreetLines(Math.min(...xs) - m, Math.min(...ys) - m * 0.77, Math.max(...xs) + m, Math.max(...ys) + m * 0.77); } catch (e) { lines = []; }
   if (seq !== callSeq) return;
-  const sources = [lines, window.map && map.querySourceFeatures ? mapStreetLines() : []].filter(l => l.length);
-  const nets = sources.map(src => streetGraph(src));
+  let mapNet;                                                    // the map's street lines: only built if the city's file doesn't give an answer
+  const nets = [lines.length ? streetGraph(lines) : null, () => mapNet !== undefined ? mapNet
+    : (mapNet = (window.map && map.querySourceFeatures ? (l => l.length ? streetGraph(l) : null)(mapStreetLines()) : null))];
   nearHydrants.forEach(h => {
     h.layStraight = true;
-    for (const G0 of nets) {                                     // the city's street file first, then the map's
+    for (const N of nets) {                                      // the city's street file first, then the map's
+      const G0 = typeof N === 'function' ? N() : N;
       const G = G0 && { nodes: new Map([...G0.nodes].map(([k, v]) => [k, { p: v.p, edges: v.edges.slice() }])), segs: G0.segs };
       const ft = G ? streetFeet(G, [h.lng, h.lat], E) : null;
       const straight = feetBetween([h.lng, h.lat], E);
@@ -1888,7 +1912,7 @@ async function loadNearHydrants(seq) {
     hydrantCross(h).then(t => {
       if (seq !== callSeq || !t) return;
       h.p._inter = t;
-      const m = hydMarkers[i]; if (m && m.getPopup()) m.getPopup().setHTML(hydrantHTML(h.p));
+      const m = h.m; if (m && m.getPopup()) m.getPopup().setHTML(hydrantHTML(h.p));   // this hydrant's own pin, even after re-ordering
       renderSheet();
     });
   });
@@ -2005,8 +2029,8 @@ async function loadBuildingAndAccess(seq) {
                         street: front ? front.p.name : null, front: front ? front.c : null, pt: pick.a.c, walks: null };
     setTimeout(() => hoseLays(seq), 0);                           // hydrant feet run to the engine in front of the building
     // The building's own outline, so B / C / D sit on its real sides (big buildings) or the neighbors (rowhouses)
-    try { callAccess.fp = await callFootprint(center); } catch (e) { callAccess.fp = null; }
-    callAccess.props = await nearbyProperties(center);
+    const [fpR, propsR] = await Promise.all([callFootprint(center).catch(() => null), nearbyProperties(center)]);   // both at once
+    callAccess.fp = fpR; callAccess.props = propsR;
     if (seq !== callSeq) return;
     drawFrontBack();
     renderSheet();
@@ -2068,7 +2092,17 @@ async function nearbyProperties(pt) {
   return null;
 }
 
-async function callFootprint(pt) {
+// One building-outline lookup per call spot (the building card and the A / B / C / D sides share it)
+function callFootprint(pt) {
+  const key = pt[0] + ',' + pt[1];
+  if (callFootprint.key !== key || !callFootprint.got) {
+    callFootprint.key = key;
+    const got = callFootprint.got = callFootprintFetch(pt);
+    got.catch(() => { if (callFootprint.got === got) callFootprint.got = null; });   // a failed lookup is asked again next time
+  }
+  return callFootprint.got;
+}
+async function callFootprintFetch(pt) {
   const d = 0.0015, dLat = d * 0.77;
   const res = await cityQuery(BUILDINGS_LAYER, { geometry: [pt[0] - d, pt[1] - dLat, pt[0] + d, pt[1] + dLat].join(','),
     geometryType: 'esriGeometryEnvelope', inSR: '4326', spatialRel: 'esriSpatialRelIntersects', outFields: 'OBJECTID',
