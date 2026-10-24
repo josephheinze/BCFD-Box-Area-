@@ -551,18 +551,35 @@ async function houseFacing(s) {
 }
 // Show the firehouse close up, turned so you're looking out of quarters
 let faceSeq = 0;
+// How far (in screen pixels) the middle of the open map area is from the middle of the screen:
+// the open area is between the search / "From" bars at the top and the bottom panel (or beside the panel on a wide screen)
+function openAreaOffset() {
+  try {
+    const W = window.innerWidth, H = window.innerHeight, sh = $('sheet').getBoundingClientRect(), top = $('originWrap').getBoundingClientRect().bottom;
+    const side = sh.width < W - 40;                              // panel sits on the left instead of across the bottom
+    const l = side ? sh.right : 0, b = side ? H : Math.min(H, sh.top);
+    const dx = (l + W) / 2 - W / 2, dy = (top + b) / 2 - H / 2;
+    return isFinite(dx) && isFinite(dy) && b - top > 80 ? [Math.round(dx), Math.round(dy)] : [0, 0];
+  } catch (e) { return [0, 0]; }
+}
+// Show the firehouse close up and centered in the open map area, turned so you're looking out of quarters
+const NO_PAD = { top: 0, bottom: 0, left: 0, right: 0 };
 function viewHouse(s, jump) {
   if (!s || !window.map) return;
   const my = ++faceSeq, key = 'facing:' + s.id + ':' + s.lng.toFixed(5) + ',' + s.lat.toFixed(5), known = +store(key);
   const b0 = store(key) != null && isFinite(known) ? known : 0;
-  const opts = { center: houseCenter([s.lng, s.lat], b0), zoom: 17.15, bearing: b0, pitch: 0 };
-  jump ? map.jumpTo(opts) : map.flyTo(opts);
   store('originFacing', b0);
+  requestAnimationFrame(() => {                                  // measure once the panel has its new size
+    if (my !== faceSeq) return;
+    // padding 0 clears the padding left over from the last call's close-up (it would push the house off center)
+    const opts = { center: [s.lng, s.lat], offset: openAreaOffset(), padding: NO_PAD, zoom: 17.15, bearing: b0, pitch: 0 };
+    jump ? map.easeTo(Object.assign(opts, { duration: 0 })) : map.flyTo(opts);
+  });
   if (store(key) != null && isFinite(known)) return;
   houseFacing(s).then(b => {
     if (b == null || my !== faceSeq || call) return;
     store('originFacing', b);
-    map.easeTo({ center: houseCenter([s.lng, s.lat], b), bearing: b, zoom: 17.15, duration: 900 });
+    map.easeTo({ center: [s.lng, s.lat], offset: openAreaOffset(), padding: NO_PAD, bearing: b, zoom: 17.15, duration: 900 });
   }).catch(e => console.error(e));
 }
 function start() {
