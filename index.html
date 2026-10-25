@@ -222,6 +222,7 @@
   .step .num { background: #ffffff; color: #082f49; }
   .step .main { font-weight: 600; }
   .fine { color: var(--muted); font-size: 12px; margin-top: 14px; }
+  .ver { color: var(--muted); font-size: 11px; opacity: .7; text-align: right; margin-top: 2px; }
   .loading { color: var(--muted); font-style: italic; }
 
   /* ---------- Map markers ---------- */
@@ -277,7 +278,7 @@
 <div id="sheet">
   <div id="grab" aria-label="Show or hide details"></div>
   <div id="sheetBody">
-    <div class="hint">Search a call address, or tap the building on the map.</div>
+    <div class="hint">Search a call address, or tap the building on the map.</div><div class="ver">v157</div>
   </div>
 </div>
 
@@ -328,6 +329,7 @@ function houseLabel(name) {
   return (e ? ['Engine ' + e] : sq ? ['Squad ' + sq] : []).concat(trucks).join(' & ') || name;
 }
 
+const APP_VERSION = 'v157';       // shown at the bottom of the panel, so you can tell which version the phone is running
 const DEFAULT_HOUSE = { id: 'E-20', name: 'E-20 T-18 A-8', address: '3130 W. North Ave 21216',
                         lng: -76.670566868816607, lat: 39.309237721872378 };
 // Fire Dept hazard buildings (CODE-X / X-RAY / UNSAFE) from the 911-CAD system, and DHCD open vacant building notices
@@ -497,6 +499,13 @@ async function cityQuery(layer, params, base) {
   }
   if (data && data.error) throw new Error(data.error.message || 'city server error');
   return data;
+}
+// Any web request that doesn't answer within `ms` is given up on (so one stuck request can't freeze the call screen)
+function fetchT(url, ms) {
+  if (!window.AbortController) return fetch(url);
+  const ctl = new AbortController();
+  setTimeout(() => ctl.abort(), ms);                              // also covers a reply that starts but never finishes
+  return fetch(url, { signal: ctl.signal });
 }
 let cityWarned = false;
 function cityFailed(err) {
@@ -1297,7 +1306,7 @@ async function geocode(text) {
   const common = `access_token=${MAPBOX_TOKEN}&limit=10&country=us&bbox=${CITY_BBOX.join(',')}&proximity=${o.lng},${o.lat}`;
   let reason = '';
   try {
-    const r = await fetch(`https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(text)}.json?${common}&autocomplete=true&types=address,poi,postcode`);
+    const r = await fetchT(`https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(text)}.json?${common}&autocomplete=true&types=address,poi,postcode`, 8000);
     const d = await r.json().catch(() => ({}));
     if (r.status === 401 || r.status === 403) throw Object.assign(new Error('token'), { token: true });
     if (r.ok && Array.isArray(d.features)) {
@@ -1309,7 +1318,7 @@ async function geocode(text) {
     reason = d.message || ('HTTP ' + r.status);
   } catch (e) { if (e.token) throw e; reason = e.message; }
   // Fallback: Mapbox Geocoding v6
-  const r = await fetch(`https://api.mapbox.com/search/geocode/v6/forward?q=${encodeURIComponent(text)}&${common}&autocomplete=true`);
+  const r = await fetchT(`https://api.mapbox.com/search/geocode/v6/forward?q=${encodeURIComponent(text)}&${common}&autocomplete=true`, 8000);
   const d = await r.json().catch(() => ({}));
   if (r.status === 401 || r.status === 403) throw Object.assign(new Error('token'), { token: true });
   if (!r.ok || !Array.isArray(d.features)) throw new Error(d.message || reason || ('HTTP ' + r.status));
@@ -1389,7 +1398,7 @@ function inMyBoxesFirst(results) {
 }
 async function reverseLabel(pt) {
   try {
-    const r = await fetch(`https://api.mapbox.com/geocoding/v5/mapbox.places/${pt.lng},${pt.lat}.json?access_token=${MAPBOX_TOKEN}&types=address&limit=1`);
+    const r = await fetchT(`https://api.mapbox.com/geocoding/v5/mapbox.places/${pt.lng},${pt.lat}.json?access_token=${MAPBOX_TOKEN}&types=address&limit=1`, 5000);
     const d = await r.json(); const f = (d.features || [])[0];
     return f ? (f.address ? `${f.address} ${f.text}` : f.text) : null;
   } catch (e) { return null; }
@@ -1470,8 +1479,11 @@ async function setCall(pt) {
   renderSheet();
   fitAll();
 
-  const labelReady = pt.label ? Promise.resolve() :
-    tapLabel(pt).then(l => { if (seq === callSeq && l) { call.label = l; renderSheet(); } }).catch(() => {});
+  // A tapped building: look up its address, but never hold the route and building card more than 6 seconds for it
+  // (if the address shows up later, it still goes on the screen)
+  const labelReady = pt.label ? Promise.resolve() : Promise.race([
+    tapLabel(pt).then(l => { if (seq === callSeq && l) { call.label = l; renderSheet(); } }).catch(() => {}),
+    new Promise(res => setTimeout(res, 6000))]);
   loadNearHydrants(seq);
   loadNearHazards(seq);
   loadWind();
@@ -1490,7 +1502,7 @@ function clearCall() {
   hydMarkers.forEach(m => m.remove()); hydMarkers = [];
   setData('route', { type: 'FeatureCollection', features: [] });
   refreshBoxFilters();
-  $('sheetBody').innerHTML = '<div class="hint">Search a call address, or tap the building on the map.</div>';
+  $('sheetBody').innerHTML = '<div class="hint">Search a call address, or tap the building on the map.</div><div class="ver">' + APP_VERSION + '</div>';
   // back over the firehouse chosen in the "From" bar (same close-up as the opening view, north up)
   if (window.map) { const s = stations.find(x => x.id === $('origin').value); if (s) viewHouse(s); else map.flyTo({ center: startCenter(), zoom: 17.15, bearing: startBearing(), pitch: 0 }); }
 }
@@ -1523,7 +1535,9 @@ async function runRoute() {
     if (seq !== callSeq) return;
     const base = `https://api.mapbox.com/directions/v5/mapbox/driving/`;
     const opts = `geometries=geojson&overview=full&steps=true&access_token=${MAPBOX_TOKEN}`;
-    const r = await fetch(`${base}${start[0]},${start[1]};${dest[0]},${dest[1]}?alternatives=true&${opts}`); const d = await r.json();
+    const rurl = `${base}${start[0]},${start[1]};${dest[0]},${dest[1]}?alternatives=true&${opts}`;
+    const getRoute = () => fetchT(rurl, 7000).then(async r => ({ r, d: await r.json() }));
+    const { r, d } = await getRoute().catch(() => getRoute());           // no answer: ask once more
     if (seq !== callSeq) return;
     if (!r.ok || !d.routes || !d.routes.length) throw new Error(d.message || 'No route found');
     // The routes a driver would pick: ride the street you leave on as far as it goes toward the call, then turn;
@@ -1532,7 +1546,7 @@ async function runRoute() {
     if (startDir != null) corners.push(alongStreet(start, startDir, dest));
     if (destDir != null) corners.push(alongStreet(dest, destDir, start));
     const extra = await Promise.all(corners.filter(c => c && feetBetween(c, start) > 250 && feetBetween(c, dest) > 250).map(c =>
-      fetch(`${base}${start[0]},${start[1]};${c[0]},${c[1]};${dest[0]},${dest[1]}?waypoints=0;2&${opts}`)
+      fetchT(`${base}${start[0]},${start[1]};${c[0]},${c[1]};${dest[0]},${dest[1]}?waypoints=0;2&${opts}`, 8000)
         .then(x => x.json()).then(j => (j.routes || [])[0]).catch(() => null)));
     if (seq !== callSeq) return;
     const rt = pickRoute(d.routes.concat(extra.filter(Boolean)));
@@ -1555,7 +1569,7 @@ async function runRoute() {
     rankHydrants();                                              // hydrants on the way in move to the top
   } catch (e) {
     if (seq !== callSeq) return;
-    window._route = { error: e.message };
+    window._route = { error: e && e.name === 'AbortError' ? "the directions server didn't answer. Clear the call and search again" : e.message };
   }
   renderSheet();
 }
@@ -1645,7 +1659,7 @@ async function loadWind() {
   if (windObs && !windObs.error && Date.now() - windAt < 10 * 60e3) return;   // reuse for 10 minutes
   for (const [st, name] of WIND_STATIONS) {
     try {
-      const r = await fetch(`https://api.weather.gov/stations/${st}/observations/latest`);
+      const r = await fetchT(`https://api.weather.gov/stations/${st}/observations/latest`, 8000);
       if (!r.ok) continue;
       const p = (await r.json()).properties || {};
       const mph = q => q && q.value != null ? (/m_s-1/.test(q.unitCode || '') ? q.value * 2.23694 : q.value * 0.621371) : null;
@@ -1970,7 +1984,7 @@ function roadsAround(c, radius = 70) {
   if (c[key]) return c[key];
   const url = `https://api.mapbox.com/v4/mapbox.mapbox-streets-v8/tilequery/${c.lng},${c.lat}.json` +
     `?radius=${radius}&limit=50&layers=road&geometry=linestring&dedupe=true&access_token=${MAPBOX_TOKEN}`;
-  c[key] = fetch(url).then(async r => {
+  c[key] = fetchT(url, 5000).then(async r => {
     const d = await r.json();
     if (!r.ok) throw new Error(d.message || ('HTTP ' + r.status));
     const roads = (d.features || []).map(f => ({ p: f.properties || {}, c: f.geometry && f.geometry.coordinates,
@@ -1989,7 +2003,7 @@ async function walkRoute(points, startBearing) {
   const brg = startBearing == null ? '' : `&bearings=${Math.round(startBearing)},60${';'.repeat(points.length - 1)}`;
   const url = `https://api.mapbox.com/directions/v5/mapbox/walking/${points.map(p => p[0] + ',' + p[1]).join(';')}` +
     `?geometries=geojson&overview=full${brg}&access_token=${MAPBOX_TOKEN}`;
-  const r = await fetch(url); const d = await r.json();
+  const r = await fetchT(url, 10000); const d = await r.json();
   if (!r.ok || !d.routes || !d.routes.length) return null;
   return { geometry: d.routes[0].geometry, ft: Math.round(d.routes[0].distance * 3.281) };
 }
@@ -2680,7 +2694,7 @@ function renderSheet() {
     <h3>Code X-Ray and vacant buildings</h3>
     <div class="legend"><span><span class="lgdot" style="background:#e11d48">X</span>Code X / X-Ray</span><span><span class="lgdot" style="background:#e11d48">D</span>Dangerous condition</span><span><span class="lgdot" style="background:#16a34a">V</span>Vacant building</span></div>
     ${haz}
-    <p class="fine">Reference and study tool. Drive times are normal-traffic estimates, and box lines and hydrants come from Baltimore City's public 911-CAD map data. Always go by dispatch and your unit's terminal. Unofficial app, not a Baltimore City Fire Department product. © 2026 Joseph Heinze. All rights reserved.</p>`;
+    <p class="fine">Reference and study tool. Drive times are normal-traffic estimates, and box lines and hydrants come from Baltimore City's public 911-CAD map data. Always go by dispatch and your unit's terminal. Unofficial app, not a Baltimore City Fire Department product. © 2026 Joseph Heinze. All rights reserved. · ${APP_VERSION}</p>`;
 
 
   const sv = $('sheetBody').querySelector('.lrsv');
