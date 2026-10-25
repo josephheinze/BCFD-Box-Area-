@@ -739,10 +739,11 @@ function addOverlays() {
   map.addLayer({ id: 'boxes-line', type: 'line', source: 'boxes',
     paint: { 'line-color': st.line, 'line-width': st.lineWidth,
              'line-opacity': 0.85, 'line-dasharray': [2, 1.5] } }, firstSymbol);
+  // the directions line goes under the map's street names, so the names stay readable on top of it
   map.addLayer({ id: 'route-casing', type: 'line', source: 'route', layout: { 'line-cap': 'round', 'line-join': 'round' },
-    paint: { 'line-color': '#0c4a6e', 'line-width': 9 } });
+    paint: { 'line-color': '#0c4a6e', 'line-width': 9 } }, firstSymbol);
   map.addLayer({ id: 'route-line', type: 'line', source: 'route', layout: { 'line-cap': 'round', 'line-join': 'round' },
-    paint: { 'line-color': '#38bdf8', 'line-width': 5 } });
+    paint: { 'line-color': '#38bdf8', 'line-width': 5 } }, firstSymbol);
   map.addLayer({ id: 'area-hydrants', type: 'circle', source: 'area-hydrants', minzoom: 15.5,
     paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 15.5, 3.5, 18, 7], 'circle-color': '#fb923c',
              'circle-stroke-color': '#111', 'circle-stroke-width': 1.5 } });
