@@ -51,12 +51,20 @@ def attr(a, name):
         if k.lower() == name.lower() or k.lower().endswith('.' + name.lower()): return v
     return None
 
+status_ok = {}
 def save(name, fields, rows, minimum):
     rows = [[None if isinstance(v, str) and v.strip().upper() == 'NULL' else v for v in r] for r in rows]   # the word "NULL" means empty
     if len(rows) < minimum:
         print(f'{name}: only {len(rows)} rows, keeping the old copy'); return
+    status_ok[name] = True
+    path = f'data/{name}.json'
+    try:
+        old = json.load(open(path))
+        if old.get('fields') == fields and old.get('rows') == json.loads(json.dumps(rows)):
+            print(f'{name}: unchanged ({len(rows)} rows)'); return      # same data: don't rewrite the big file
+    except Exception: pass
     out = {'at': int(time.time() * 1000), 'fields': fields, 'rows': rows}
-    with open(f'data/{name}.json', 'w') as fh: json.dump(out, fh, separators=(',', ':'))
+    with open(path, 'w') as fh: json.dump(out, fh, separators=(',', ':'))
     print(f'{name}: saved {len(rows)} rows')
 
 r6 = lambda v: round(v, 6)
@@ -119,6 +127,9 @@ try:
     save('vacants', ['Address', 'NoticeNum', 'DateNotice'], rows, 500)
 except Exception as e: failed.append('vacants'); print('vacants failed:', e)
 
+# a tiny file saying when the city was last checked and which copies are current (the app reads this for freshness)
+with open('data/status.json', 'w') as fh:
+    json.dump({'checked': int(time.time() * 1000), 'ok': status_ok, 'failed': failed}, fh, separators=(',', ':'))
 print('done; failed:', failed or 'none')
 
 # Save the copies to the site right here (pulling first, so an upload made while this ran can't block the save).
