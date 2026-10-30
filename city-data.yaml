@@ -1,0 +1,136 @@
+# Copies Baltimore City's box areas, hydrants, firehouses and vacant notices into this site's data/ folder
+# every 3 hours, so the app loads them from its own site even when the city's map servers are down.
+# A copy is only replaced when the city answers with a full, sensible set; otherwise the last good copy stays.
+name: Copy city data
+
+on:
+  schedule:
+    - cron: '17 */3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: city-data
+  cancel-in-progress: false
+
+jobs:
+  copy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download from the city
+        run: |
+          mkdir -p data
+          python3 - <<'PY'
+          import json, time, urllib.parse, urllib.request, sys, os
+
+          CITY = os.environ.get('CITY_URL', 'https://egisdata.baltimorecity.gov/egis/rest/services/911/BaltCity_911_RapidDeploy_layers/MapServer')
+          GIS = os.environ.get('GIS_URL', 'https://gisdata.baltimorecity.gov/egis/rest/services/CAD911/')
+          VACANT = os.environ.get('VACANT_URL', 'https://egisdata.baltimorecity.gov/egis/rest/services/Housing/DHCD_Open_Baltimore_Datasets/FeatureServer')
+          UA = {'User-Agent': 'BCFD-Box-Info data copy (github.com/josephheinze/BCFD-Box-Area-)'}
+
+          def get(url, tries=3):
+              for i in range(tries):
+                  try:
+                      with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=90) as r:
+                          return json.loads(r.read().decode('utf-8'))
+                  except Exception as e:
+                      print('  retry', i + 1, url[:120], e)
+                      time.sleep(5 * (i + 1))
+              raise RuntimeError('no answer: ' + url[:120])
+
+          def layer_id(svc):
+              try: return (get(svc + '?f=json').get('layers') or [{'id': 0}])[0]['id']
+              except Exception: return 0
+
+          def query_all(base, layer, extra):
+              feats, offset = [], 0
+              while True:
+                  q = dict(where='1=1', outFields='*', returnGeometry='true', outSR='4326', f='json', resultOffset=str(offset))
+                  q.update(extra)
+                  d = get(f'{base}/{layer}/query?' + urllib.parse.urlencode(q))
+                  if 'error' in d: raise RuntimeError(str(d['error']))
+                  got = d.get('features') or []
+                  feats += got
+                  offset += len(got)
+                  if not d.get('exceededTransferLimit') or not got or offset > 60000: break
+              return feats
+
+          def from_any(sources, extra):
+              last = None
+              for base, layer in sources:
+                  try:
+                      f = query_all(base, layer, extra)
+                      if f: return f
+                  except Exception as e:
+                      last = e; print('  source failed:', base, e)
+              raise RuntimeError(f'all sources failed: {last}')
+
+          def attr(a, name):
+              if name in a: return a[name]
+              for k, v in a.items():
+                  if k.lower() == name.lower() or k.lower().endswith('.' + name.lower()): return v
+              return None
+
+          def save(name, fields, rows, minimum):
+              if len(rows) < minimum:
+                  print(f'{name}: only {len(rows)} rows, keeping the old copy'); return
+              out = {'at': int(time.time() * 1000), 'fields': fields, 'rows': rows}
+              with open(f'data/{name}.json', 'w') as fh: json.dump(out, fh, separators=(',', ':'))
+              print(f'{name}: saved {len(rows)} rows')
+
+          r6 = lambda v: round(v, 6)
+          failed = []
+
+          # box areas
+          try:
+              f = from_any([(CITY, 12), (GIS + 'Fire_RDs/FeatureServer', layer_id(GIS + 'Fire_RDs/FeatureServer'))],
+                           {'maxAllowableOffset': '0.00002', 'geometryPrecision': '6'})
+              rows = [[attr(x['attributes'], 'Area'), attr(x['attributes'], 'MapBook'),
+                       [[[r6(c[0]), r6(c[1])] for c in ring] for ring in x['geometry']['rings']]]
+                      for x in f if x.get('geometry') and x['geometry'].get('rings') and attr(x['attributes'], 'Area')]
+              save('boxes', ['Area', 'MapBook', 'rings'], rows, 50)
+          except Exception as e: failed.append('boxes'); print('boxes failed:', e)
+
+          # hydrants
+          HF = ['HYDRANT_ID', 'CAD_ADDR', 'STREET_NUM', 'STREET_NAM', 'CROSS_STRE', 'CORNER_POS', 'LOCATION_D', 'LOCATION_1',
+                'SRC_MAIN_S', 'FEAT_STATU', 'CONDITION', 'DATEABANDO', 'RESP_AGENC', 'SERVICE']
+          try:
+              f = from_any([(CITY, 3), (GIS + 'Hydrants_City/FeatureServer', layer_id(GIS + 'Hydrants_City/FeatureServer'))], {})
+              rows = [[r6(x['geometry']['x']), r6(x['geometry']['y'])] + [attr(x['attributes'], k) for k in HF]
+                      for x in f if x.get('geometry') and x['geometry'].get('x') is not None]
+              save('hydrants', HF, rows, 1000)
+          except Exception as e: failed.append('hydrants'); print('hydrants failed:', e)
+
+          # firehouses
+          try:
+              f = from_any([(CITY, 0), (GIS + 'fire_station/FeatureServer', layer_id(GIS + 'fire_station/FeatureServer'))], {})
+              rows = [[r6(x['geometry']['x']), r6(x['geometry']['y']), attr(x['attributes'], 'NAME'), attr(x['attributes'], 'ADDRESS')]
+                      for x in f if x.get('geometry') and x['geometry'].get('x') is not None]
+              save('stations', ['NAME', 'ADDRESS'], rows, 20)
+          except Exception as e: failed.append('stations'); print('stations failed:', e)
+
+          # vacant notices
+          try:
+              f = from_any([(VACANT, 1)], {})
+              rows = [[r6(x['geometry']['x']), r6(x['geometry']['y']), attr(x['attributes'], 'Address'),
+                       attr(x['attributes'], 'NoticeNum'), attr(x['attributes'], 'DateNotice')]
+                      for x in f if x.get('geometry') and x['geometry'].get('x') is not None]
+              save('vacants', ['Address', 'NoticeNum', 'DateNotice'], rows, 500)
+          except Exception as e: failed.append('vacants'); print('vacants failed:', e)
+
+          print('done; failed:', failed or 'none')
+          PY
+
+      - name: Save the copies to the site
+        run: |
+          git config user.name "city-data-bot"
+          git config user.email "city-data-bot@users.noreply.github.com"
+          git add data
+          if git diff --cached --quiet; then echo "no changes"; exit 0; fi
+          git commit -m "Update city data copy"
+          git push
