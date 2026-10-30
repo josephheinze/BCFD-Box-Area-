@@ -52,6 +52,7 @@ def attr(a, name):
     return None
 
 def save(name, fields, rows, minimum):
+    rows = [[None if isinstance(v, str) and v.strip().upper() == 'NULL' else v for v in r] for r in rows]   # the word "NULL" means empty
     if len(rows) < minimum:
         print(f'{name}: only {len(rows)} rows, keeping the old copy'); return
     out = {'at': int(time.time() * 1000), 'fields': fields, 'rows': rows}
