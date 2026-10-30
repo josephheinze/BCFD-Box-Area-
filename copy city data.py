@@ -6,10 +6,10 @@ GIS = os.environ.get('GIS_URL', 'https://gisdata.baltimorecity.gov/egis/rest/ser
 VACANT = os.environ.get('VACANT_URL', 'https://egisdata.baltimorecity.gov/egis/rest/services/Housing/DHCD_Open_Baltimore_Datasets/FeatureServer')
 UA = {'User-Agent': 'BCFD-Box-Info data copy (github.com/josephheinze/BCFD-Box-Area-)'}
 
-def get(url, tries=3):
+def get(url, tries=2):
     for i in range(tries):
         try:
-            with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=90) as r:
+            with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=45) as r:
                 return json.loads(r.read().decode('utf-8'))
         except Exception as e:
             print('  retry', i + 1, url[:120], e)
@@ -72,10 +72,30 @@ except Exception as e: failed.append('boxes'); print('boxes failed:', e)
 # hydrants
 HF = ['HYDRANT_ID', 'CAD_ADDR', 'STREET_NUM', 'STREET_NAM', 'CROSS_STRE', 'CORNER_POS', 'LOCATION_D', 'LOCATION_1',
       'SRC_MAIN_S', 'FEAT_STATU', 'CONDITION', 'DATEABANDO', 'RESP_AGENC', 'SERVICE']
+DPW = os.environ.get('DPW_URL', 'https://dpwview.baltimorecity.gov/agsprd/rest/services/Hydrants/MapServer')
+def dpw_hydrants():
+    # DPW's own hydrant map: one layer per status (0 in service, 1 pending inspection, 2 repairs needed, 3 out of service, 4 no inspection)
+    flags = {2: 'Repairs needed (DPW)', 3: 'OUT OF SERVICE (DPW)'}
+    rows = []
+    for layer in range(5):
+        for x in query_all(DPW, layer, {}):
+            a, g = x['attributes'], x.get('geometry') or {}
+            if g.get('x') is None: continue
+            vals = {'HYDRANT_ID': attr(a, 'HYDRANT_ID'), 'CAD_ADDR': attr(a, 'CAD_ADDR'), 'STREET_NUM': attr(a, 'STREET_NUM'),
+                    'STREET_NAM': attr(a, 'STREET_NAME'), 'CROSS_STRE': attr(a, 'CROSS_STREET'), 'CORNER_POS': attr(a, 'CORNER_POSITION'),
+                    'LOCATION_D': attr(a, 'LOCATION_DESCRIPTION'), 'LOCATION_1': attr(a, 'LOCATION_DESCRIPTION2'), 'SRC_MAIN_S': attr(a, 'SRC_MAIN_SIZE'),
+                    'FEAT_STATU': attr(a, 'FEAT_STATUS'), 'CONDITION': attr(a, 'CONDITION'), 'DATEABANDO': attr(a, 'DATEABANDONED'),
+                    'RESP_AGENC': attr(a, 'RESP_AGENCY'), 'SERVICE': flags.get(layer) or attr(a, 'SERVICE')}
+            rows.append([r6(g['x']), r6(g['y'])] + [vals[k] for k in HF])
+    return rows
 try:
-    f = from_any([(CITY, 3), (GIS + 'Hydrants_City/FeatureServer', layer_id(GIS + 'Hydrants_City/FeatureServer'))], {})
-    rows = [[r6(x['geometry']['x']), r6(x['geometry']['y'])] + [attr(x['attributes'], k) for k in HF]
-            for x in f if x.get('geometry') and x['geometry'].get('x') is not None]
+    try:
+        f = from_any([(CITY, 3), (GIS + 'Hydrants_City/FeatureServer', layer_id(GIS + 'Hydrants_City/FeatureServer'))], {})
+        rows = [[r6(x['geometry']['x']), r6(x['geometry']['y'])] + [attr(x['attributes'], k) for k in HF]
+                for x in f if x.get('geometry') and x['geometry'].get('x') is not None]
+    except Exception as e1:
+        print('city hydrant layers failed, using DPW hydrant map:', e1)
+        rows = dpw_hydrants()
     save('hydrants', HF, rows, 1000)
 except Exception as e: failed.append('hydrants'); print('hydrants failed:', e)
 
