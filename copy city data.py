@@ -6,10 +6,12 @@ GIS = os.environ.get('GIS_URL', 'https://gisdata.baltimorecity.gov/egis/rest/ser
 VACANT = os.environ.get('VACANT_URL', 'https://egisdata.baltimorecity.gov/egis/rest/services/Housing/DHCD_Open_Baltimore_Datasets/FeatureServer')
 UA = {'User-Agent': 'BCFD-Box-Info data copy (github.com/josephheinze/BCFD-Box-Area-)'}
 
+# The city's 911 servers have been hanging instead of answering: give each request 25 s and one retry, so a dead
+# server is skipped in about a minute and the job moves on to the other sources.
 def get(url, tries=2):
     for i in range(tries):
         try:
-            with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=45) as r:
+            with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=25) as r:
                 return json.loads(r.read().decode('utf-8'))
         except Exception as e:
             print('  retry', i + 1, url[:120], e)
@@ -117,3 +119,22 @@ try:
 except Exception as e: failed.append('vacants'); print('vacants failed:', e)
 
 print('done; failed:', failed or 'none')
+
+# Save the copies to the site right here (pulling first, so an upload made while this ran can't block the save).
+import subprocess
+def git(*a, check=True):
+    print('$ git', ' '.join(a)); return subprocess.run(['git', *a], check=check)
+if os.path.isdir('.git') and not os.environ.get('NO_GIT'):
+    git('config', 'user.name', 'city-data-bot'); git('config', 'user.email', 'city-data-bot@users.noreply.github.com')
+    git('add', 'data')
+    if subprocess.run(['git', 'diff', '--cached', '--quiet']).returncode != 0:
+        git('commit', '-m', 'Update city data copy')
+        for attempt in range(4):
+            git('pull', '--rebase', '--autostash', 'origin', 'main', check=False)
+            if git('push', 'origin', 'HEAD:main', check=False).returncode == 0:
+                print('saved to the site'); break
+            time.sleep(5)
+        else:
+            sys.exit('could not save to the site')
+    else:
+        print('nothing new to save')
