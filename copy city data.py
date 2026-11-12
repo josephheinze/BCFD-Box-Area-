@@ -52,7 +52,8 @@ def attr(a, name):
     return None
 
 status_ok = {}
-def save(name, fields, rows, minimum):
+notes = {}
+def save(name, fields, rows, minimum, extra=None):
     rows = [[None if isinstance(v, str) and v.strip().upper() == 'NULL' else v for v in r] for r in rows]   # the word "NULL" means empty
     if len(rows) < minimum:
         print(f'{name}: only {len(rows)} rows, keeping the old copy'); return
@@ -60,10 +61,12 @@ def save(name, fields, rows, minimum):
     path = f'data/{name}.json'
     try:
         old = json.load(open(path))
-        if old.get('fields') == fields and old.get('rows') == json.loads(json.dumps(rows)):
+        if old.get('fields') == fields and old.get('rows') == json.loads(json.dumps(rows)) and \
+           all(old.get(k) == v for k, v in (extra or {}).items()):
             print(f'{name}: unchanged ({len(rows)} rows)'); return      # same data: don't rewrite the big file
     except Exception: pass
     out = {'at': int(time.time() * 1000), 'fields': fields, 'rows': rows}
+    out.update(extra or {})
     with open(path, 'w') as fh: json.dump(out, fh, separators=(',', ':'))
     print(f'{name}: saved {len(rows)} rows')
 
@@ -119,17 +122,98 @@ try:
 except Exception as e: failed.append('stations'); print('stations failed:', e)
 
 # vacant notices
+# First the city's housing (DHCD) server, as always. If it fails (broken since the late-October city outage), the same
+# notices from the city's Open Baltimore data site: the service its listing reads from, then its stored download files.
+# A copy made that way is marked source "open-data" with the date of the newest notice in it; the app always asks the
+# city first for those, shows the copy only when the city fails, and labels how old it is.
+OB_ITEM = os.environ.get('VACANT_ITEM', '691d65a5f85640e6aaa46930bd9dc102')   # Open Baltimore: "Vacant Building Notices"
+BALT = (-76.75, 39.18, -76.50, 39.40)
+
+def to_ms(v):
+    if v is None or v == '': return None
+    if isinstance(v, (int, float)): return int(v if v > 1e11 else v * 1000)
+    from datetime import datetime, timezone
+    t = str(v).strip().replace('/', '-').replace('T', ' ').rstrip('Z')
+    t = t.split('+')[0].split('.')[0].strip()
+    for fmt in ('%Y-%m-%d %H:%M:%S', '%Y-%m-%d %H:%M', '%Y-%m-%d', '%m-%d-%Y %H:%M:%S', '%m-%d-%Y'):
+        try: return int(datetime.strptime(t, fmt).replace(tzinfo=timezone.utc).timestamp() * 1000)
+        except ValueError: pass
+    return None
+
+def pick(keys, *tests):
+    for test in tests:
+        for k in keys:
+            if test(k.lower().replace('_', '').replace(' ', '')): return k
+    return None
+
+def vacant_rows(points):
+    # points: [(x, y, attributes)]. Only accepted when it really is the vacant notice list: address and notice fields,
+    # points inside Baltimore.
+    keys = set()
+    for _, _, a in points[:50]: keys.update(a.keys())
+    ka = pick(keys, lambda k: k == 'address', lambda k: k in ('fulladdr', 'fulladdress', 'propertyaddress'), lambda k: 'address' in k)
+    kn = pick(keys, lambda k: k == 'noticenum', lambda k: 'notice' in k and ('num' in k or k.endswith('no') or 'id' in k))
+    kd = pick(keys, lambda k: k == 'datenotice', lambda k: 'notice' in k and 'date' in k, lambda k: 'date' in k)
+    if not ka or not kn: raise RuntimeError(f'not the vacant notice list (fields: {sorted(keys)[:20]})')
+    rows = [[r6(x), r6(y), a.get(ka), a.get(kn), to_ms(a.get(kd)) if kd else None] for x, y, a in points
+            if x is not None and y is not None and BALT[0] < x < BALT[2] and BALT[1] < y < BALT[3]]
+    return rows
+
+def open_baltimore_vacants():
+    import re
+    tried = []
+    try:   # 1. the service Open Baltimore's listing reads from, when it's not the broken city server
+        item = get(f'https://www.arcgis.com/sharing/rest/content/items/{OB_ITEM}?f=json', tries=1)
+        url = (item.get('url') or '').rstrip('/')
+        tried.append('listing service: ' + (url or 'none'))
+        if url and 'egisdata.baltimorecity.gov' not in url:
+            m = re.search(r'/(\d+)$', url)
+            base, layers = (url[:m.start()], [int(m.group(1))]) if m else (url, [l['id'] for l in (get(url + '?f=json', tries=1).get('layers') or [])])
+            for L in layers:
+                try:
+                    rows = vacant_rows([(x['geometry'].get('x'), x['geometry'].get('y'), x['attributes'])
+                                        for x in query_all(base, L, {}) if x.get('geometry')])
+                    if len(rows) >= 500: return rows, f'{base}/{L}'
+                    tried.append(f'layer {L}: only {len(rows)}')
+                except Exception as e: tried.append(f'layer {L}: {e}')
+    except Exception as e: tried.append(f'listing: {e}')
+    for L in (1, 0, None):   # 2. Open Baltimore's stored download files (GeoJSON)
+        sfx = '' if L is None else f'_{L}'
+        for url in ([f'https://opendata.arcgis.com/api/v3/datasets/{OB_ITEM}{sfx}/downloads/data?format=geojson&spatialRefId=4326&where=1%3D1',
+                     f'https://hub.arcgis.com/api/v3/datasets/{OB_ITEM}{sfx}/downloads/data?format=geojson&spatialRefId=4326&where=1%3D1'] +
+                    ([f'https://data.baltimorecity.gov/api/download/v1/items/{OB_ITEM}/geojson?layers={L}'] if L is not None else [])):
+            try:
+                d = get(url, tries=1)
+                pts = [((x.get('geometry') or {}).get('coordinates') or [None, None])[:2] + [x.get('properties') or {}]
+                       for x in d.get('features') or [] if (x.get('geometry') or {}).get('type') == 'Point']
+                rows = vacant_rows(pts)
+                if len(rows) >= 500: return rows, url.split('?')[0]
+                tried.append(f'{url[:90]}: only {len(rows)}')
+            except Exception as e: tried.append(f'{url[:90]}: {str(e)[:120]}')
+    raise RuntimeError('Open Baltimore failed too: ' + ' | '.join(tried))
+
 try:
-    f = from_any([(VACANT, 1)], {})
-    rows = [[r6(x['geometry']['x']), r6(x['geometry']['y']), attr(x['attributes'], 'Address'),
-             attr(x['attributes'], 'NoticeNum'), attr(x['attributes'], 'DateNotice')]
-            for x in f if x.get('geometry') and x['geometry'].get('x') is not None]
-    save('vacants', ['Address', 'NoticeNum', 'DateNotice'], rows, 500)
-except Exception as e: failed.append('vacants'); print('vacants failed:', e)
+    try:
+        f = from_any([(VACANT, 1)], {})
+        rows = [[r6(x['geometry']['x']), r6(x['geometry']['y']), attr(x['attributes'], 'Address'),
+                 attr(x['attributes'], 'NoticeNum'), attr(x['attributes'], 'DateNotice')]
+                for x in f if x.get('geometry') and x['geometry'].get('x') is not None]
+        save('vacants', ['Address', 'NoticeNum', 'DateNotice'], rows, 500, {'source': 'city'})
+        if status_ok.get('vacants'): notes['vacants'] = 'city housing server'
+    except Exception as e1:
+        print('city vacant server failed, trying Open Baltimore:', e1)
+        rows, src = open_baltimore_vacants()
+        newest = max([r[4] for r in rows if isinstance(r[4], (int, float))] or [0]) or None
+        save('vacants', ['Address', 'NoticeNum', 'DateNotice'], rows, 500, {'source': 'open-data', 'from': src, 'newest': newest})
+        status_ok.pop('vacants', None)       # not "current": the app keeps asking the city first
+        notes['vacants'] = f'city failed; Open Baltimore copy from {src}, {len(rows)} notices, newest ' + \
+            (time.strftime('%Y-%m-%d', time.gmtime(newest / 1000)) if newest else 'unknown')
+        failed.append('vacants (city)')
+except Exception as e: failed.append('vacants'); notes['vacants'] = str(e)[:600]; print('vacants failed:', e)
 
 # a tiny file saying when the city was last checked and which copies are current (the app reads this for freshness)
 with open('data/status.json', 'w') as fh:
-    json.dump({'checked': int(time.time() * 1000), 'ok': status_ok, 'failed': failed}, fh, separators=(',', ':'))
+    json.dump({'checked': int(time.time() * 1000), 'ok': status_ok, 'failed': failed, 'notes': notes}, fh, separators=(',', ':'))
 print('done; failed:', failed or 'none')
 
 # Save the copies to the site right here (pulling first, so an upload made while this ran can't block the save).
