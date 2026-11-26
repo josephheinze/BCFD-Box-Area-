@@ -8,10 +8,11 @@ UA = {'User-Agent': 'BCFD-Box-Info data copy (github.com/josephheinze/BCFD-Box-A
 
 # The city's 911 servers have been hanging instead of answering: give each request 25 s and one retry, so a dead
 # server is skipped in about a minute and the job moves on to the other sources.
-def get(url, tries=2):
+def get(url, tries=2, post=None):
     for i in range(tries):
         try:
-            with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=25) as r:
+            data = urllib.parse.urlencode(post).encode() if post else None
+            with urllib.request.urlopen(urllib.request.Request(url, data=data, headers=UA), timeout=25) as r:
                 return json.loads(r.read().decode('utf-8'))
         except Exception as e:
             print('  retry', i + 1, url[:120], e)
@@ -22,15 +23,45 @@ def layer_id(svc):
     try: return (get(svc + '?f=json').get('layers') or [{'id': 0}])[0]['id']
     except Exception: return 0
 
+def fkey(f):
+    # one record = one key: its object ID when it has one, else its attributes and position
+    a = f.get('attributes') or {}
+    for k, v in a.items():
+        if k.lower() in ('objectid', 'fid', 'objectid_1') and v is not None: return ('id', v)
+    return ('raw', json.dumps(a, sort_keys=True), json.dumps(f.get('geometry'), sort_keys=True))
+
+def query_by_ids(base, layer, extra):
+    # Servers that ignore page offsets: ask for every record's ID first, then fetch them 500 at a time
+    q = dict(where='1=1', returnIdsOnly='true', f='json'); q.update({k: v for k, v in extra.items() if k == 'where'})
+    d = get(f'{base}/{layer}/query?' + urllib.parse.urlencode(q))
+    if 'error' in d: raise RuntimeError(str(d['error']))
+    ids = sorted(d.get('objectIds') or [])
+    feats = []
+    for i in range(0, len(ids), 500):
+        q = dict(objectIds=','.join(map(str, ids[i:i + 500])), outFields='*', returnGeometry='true', outSR='4326', f='json')
+        q.update({k: v for k, v in extra.items() if k != 'where'})
+        d = get(f'{base}/{layer}/query', post=q)
+        if 'error' in d: raise RuntimeError(str(d['error']))
+        feats += d.get('features') or []
+    print(f'  {base}/{layer}: fetched {len(feats)} by ID (server ignores page offsets)')
+    return feats
+
 def query_all(base, layer, extra):
-    feats, offset = [], 0
+    # Nov 2026: DPW's hydrant server started ignoring resultOffset and sending the same first page over and over, so the
+    # copy filled with repeats (184,205 rows, only 4,203 different hydrants). Now repeats are dropped, and a page with
+    # nothing new switches to fetching by ID.
+    feats, offset, seen = [], 0, set()
     while True:
         q = dict(where='1=1', outFields='*', returnGeometry='true', outSR='4326', f='json', resultOffset=str(offset))
         q.update(extra)
         d = get(f'{base}/{layer}/query?' + urllib.parse.urlencode(q))
         if 'error' in d: raise RuntimeError(str(d['error']))
         got = d.get('features') or []
-        feats += got
+        new = [f for f in got if fkey(f) not in seen]
+        if got and not new and d.get('exceededTransferLimit'):
+            return query_by_ids(base, layer, extra)
+        for f in new: seen.add(fkey(f))
+        feats += new
         offset += len(got)
         if not d.get('exceededTransferLimit') or not got or offset > 60000: break
     return feats
@@ -55,12 +86,25 @@ status_ok = {}
 notes = {}
 def save(name, fields, rows, minimum, extra=None):
     rows = [[None if isinstance(v, str) and v.strip().upper() == 'NULL' else v for v in r] for r in rows]   # the word "NULL" means empty
+    seen_rows, uniq = set(), []
+    for r in rows:
+        k = json.dumps(r)
+        if k not in seen_rows: seen_rows.add(k); uniq.append(r)
+    if len(uniq) < len(rows): print(f'{name}: dropped {len(rows) - len(uniq)} repeated rows')
+    rows = uniq
     if len(rows) < minimum:
         print(f'{name}: only {len(rows)} rows, keeping the old copy'); return
     status_ok[name] = True
     path = f'data/{name}.json'
     try:
         old = json.load(open(path))
+        old_n = len({json.dumps(r) for r in old.get('rows') or []})
+        if old_n and len(rows) < 0.8 * old_n:                      # a big drop means the server sent a partial list
+            print(f'{name}: only {len(rows)} rows vs {old_n} in the current copy, keeping the current copy')
+            notes[name] = f'kept the current copy: the new list had {len(rows)} records vs {old_n}'
+            status_ok.pop(name, None); return
+    except Exception: pass
+    try:
         if old.get('fields') == fields and old.get('rows') == json.loads(json.dumps(rows)) and \
            all(old.get(k) == v for k, v in (extra or {}).items()):
             print(f'{name}: unchanged ({len(rows)} rows)'); return      # same data: don't rewrite the big file
